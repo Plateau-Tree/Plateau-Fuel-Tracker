@@ -451,8 +451,14 @@ function parseDate(str) {
   if (p[0].length === 4) {
     // YYYY/MM/DD
     [y, m, d] = p.map(Number);
+  } else if (p[2].length === 4 && Number(p[0]) > 12 && Number(p[1]) <= 12) {
+    // DD/MM/YYYY — day is > 12 so it can't be a month
+    [d, m, y] = p.map(Number);
+  } else if (p[2].length === 4 && Number(p[0]) <= 12 && Number(p[1]) > 12) {
+    // MM/DD/YYYY — month-first format (e.g. "March 16, 2026" → "3/16/2026")
+    [m, d, y] = p.map(Number);
   } else {
-    // DD/MM/YY or DD/MM/YYYY
+    // Default: DD/MM/YY or DD/MM/YYYY (Australian standard)
     [d, m, y] = p.map(Number);
   }
   // Expand 2-digit year: 00-49 → 2000s, 50-99 → 1900s
