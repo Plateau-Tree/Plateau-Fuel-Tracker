@@ -1,6 +1,24 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import * as XLSX from "xlsx";
 
+// ─── Storage compatibility layer ────────────────────────────────────────────
+// Claude artifacts provide window.storage, but regular browsers don't.
+// This shim provides the same API using localStorage so the app works everywhere.
+if (!window.storage) {
+  window.storage = {
+    async get(key) {
+      const v = localStorage.getItem(key);
+      return v !== null ? { value: v } : null;
+    },
+    async set(key, value) {
+      localStorage.setItem(key, value);
+    },
+    async delete(key) {
+      localStorage.removeItem(key);
+    },
+  };
+}
+
 // ─── Config ────────────────────────────────────────────────────────────────
 const DIVISIONS = {
   Tree: {
