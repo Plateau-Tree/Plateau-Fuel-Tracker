@@ -1,0 +1,7 @@
+/* Minimal reset — app handles its own styling */
+body {
+  margin: 0;
+}
+#root {
+  min-height: 100vh;
+}

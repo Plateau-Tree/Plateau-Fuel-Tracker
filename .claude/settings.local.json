@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(clip)",
+      "Bash(npm --version)",
+      "Bash(command -v npm)",
+      "Bash(command -v node)",
+      "Bash(command -v npx)",
+      "Bash(npx --version)",
+      "Bash(command -v bun)",
+      "Bash(bun --version)",
+      "Bash(command -v deno)",
+      "Bash(deno --version)",
+      "Bash(command -v pnpm)",
+      "Bash(pnpm --version)",
+      "Bash(export PATH=\"$PATH:/c/Program Files/nodejs\")",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //PID 17916 //F)",
+      "Bash(wc -l \"/c/Users/ptsuser/Downloads/fuel_app \\(1\\).jsx\")",
+      "Bash(wc -l \"C:\\\\Users\\\\ptsuser\\\\Downloads\\\\fuel_app \\(1\\).jsx\")"
+    ]
+  }
+}
