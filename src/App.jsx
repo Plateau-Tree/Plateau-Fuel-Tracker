@@ -149,6 +149,21 @@ const db = {
     const { error } = await supabase.from("resolved_flags").delete().eq("id", flagId);
     if (error) console.error("DB deleteResolvedFlag:", error);
   },
+
+  // Load a shared app setting (like the API key)
+  async loadSetting(key) {
+    if (!supabase) return null;
+    const { data, error } = await supabase.from("app_settings").select("value").eq("key", key).single();
+    if (error) { if (error.code !== "PGRST116") console.error("DB loadSetting:", error); return null; }
+    return data?.value || null;
+  },
+
+  // Save a shared app setting
+  async saveSetting(key, value) {
+    if (!supabase) return;
+    const { error } = await supabase.from("app_settings").upsert({ key, value });
+    if (error) console.error("DB saveSetting:", error);
+  },
 };
 
 // ─── Storage compatibility layer ────────────────────────────────────────────
@@ -1865,15 +1880,18 @@ export default function App() {
 
         // Then, try to load from Supabase (cloud — shared across all devices)
         if (supabase) {
-          const [cloudEntries, cloudService, cloudResolved] = await Promise.all([
+          const [cloudEntries, cloudService, cloudResolved, cloudApiKey] = await Promise.all([
             db.loadEntries().catch(() => null),
             db.loadServiceData().catch(() => null),
             db.loadResolvedFlags().catch(() => null),
+            db.loadSetting("anthropic_api_key").catch(() => null),
           ]);
           // Use cloud data if available, otherwise use local data
           if (cloudEntries) localEntries = cloudEntries;
           if (cloudService) localService = cloudService;
           if (cloudResolved) localResolved = cloudResolved;
+          // Use shared API key from cloud if available (overrides local)
+          if (cloudApiKey) { setApiKey(cloudApiKey); setApiKeyInput(cloudApiKey); }
         }
 
         setEntries(localEntries);
@@ -5509,10 +5527,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           </div>
           <button onClick={async () => {
             await window.storage.set("fuel_api_key", apiKeyInput).catch(() => {});
-            setApiKey(apiKeyInput); showToast("API key saved");
+            await db.saveSetting("anthropic_api_key", apiKeyInput);
+            setApiKey(apiKeyInput); showToast("API key saved (shared with all devices)");
           }} style={{ padding: "9px 16px", background: "#16a34a", color: "white", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>Save</button>
         </div>
-        <div style={{ fontSize: 11, color: "#94a3b8" }}>Stored locally in plaintext {"\u00B7"} only sent to Anthropic for scanning {"\u00B7"} do not use on shared devices {"\u00B7"} get a key at console.anthropic.com</div>
+        <div style={{ fontSize: 11, color: "#94a3b8" }}>Shared across all devices via cloud {"\u00B7"} only sent to Anthropic for scanning {"\u00B7"} get a key at console.anthropic.com</div>
         {apiKey && <div style={{ fontSize: 12, color: "#15803d", marginTop: 6, fontWeight: 500 }}>{"\u2713"} API key is set</div>}
       </div>
       <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 16 }}>
