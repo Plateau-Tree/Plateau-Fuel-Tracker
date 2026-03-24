@@ -5855,9 +5855,12 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         padding: "0 16px", display: "flex", alignItems: "center",
         justifyContent: "space-between", height: 56, position: "sticky", top: 0, zIndex: 10,
       }}>
-        <div>
-          <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700, color: "#16a34a", letterSpacing: "0.06em" }}>PLATEAU TREES</div>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", lineHeight: 1 }}>Fuel Tracker</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <img src="/favicon.png" alt="PT Logo" style={{ width: 36, height: 36, borderRadius: 4 }} />
+          <div>
+            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 20, fontWeight: 700, color: "#16a34a", letterSpacing: "0.06em" }}>PLATEAU TREES</div>
+            <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", lineHeight: 1 }}>Fuel Tracker</div>
+          </div>
         </div>
         <div style={{ display: "flex", gap: 4, alignItems: "center", overflowX: "auto", flexShrink: 1 }}>
           {navItems.map(([v, label]) => (
