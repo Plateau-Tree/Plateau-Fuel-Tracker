@@ -302,7 +302,7 @@ Also look for handwritten notes, and the vehicle odometer if visible on the dash
 
 Return ONLY valid JSON with no other text:
 {
-  "date": "DD/MM/YYYY",
+  "date": "DD/MM/YYYY (ALWAYS use full 4-digit year, e.g. 2026 not 26)",
   "station": "station name or null",
   "fuelType": "primary fuel type or null",
   "pricePerLitre": number_or_null,
@@ -434,18 +434,33 @@ async function claudeScan(apiKey, b64, mime, prompt) {
 
 function parseDate(str) {
   if (!str) return 0;
-  const p = str.split(/[\/\-\.]/);
+  // Strip ordinal suffixes (e.g. "16th" → "16") and month names → numbers
+  let cleaned = str.trim()
+    .replace(/(\d+)(st|nd|rd|th)/gi, "$1")
+    .replace(/\b(january|jan)\b/gi, "1").replace(/\b(february|feb)\b/gi, "2")
+    .replace(/\b(march|mar)\b/gi, "3").replace(/\b(april|apr)\b/gi, "4")
+    .replace(/\b(may)\b/gi, "5").replace(/\b(june|jun)\b/gi, "6")
+    .replace(/\b(july|jul)\b/gi, "7").replace(/\b(august|aug)\b/gi, "8")
+    .replace(/\b(september|sep)\b/gi, "9").replace(/\b(october|oct)\b/gi, "10")
+    .replace(/\b(november|nov)\b/gi, "11").replace(/\b(december|dec)\b/gi, "12");
+  // Normalise separators: spaces, commas, slashes, dashes, dots → "/"
+  cleaned = cleaned.replace(/[\s,\-\.]+/g, "/").replace(/\/+/g, "/").replace(/^\/|\/$/g, "");
+  const p = cleaned.split("/");
   if (p.length < 3) return 0;
-  // Determine year/month/day based on whether first part looks like a year
   let y, m, d;
   if (p[0].length === 4) {
+    // YYYY/MM/DD
     [y, m, d] = p.map(Number);
   } else {
+    // DD/MM/YY or DD/MM/YYYY
     [d, m, y] = p.map(Number);
+  }
+  // Expand 2-digit year: 00-49 → 2000s, 50-99 → 1900s
+  if (y >= 0 && y <= 99) {
+    y += y <= 49 ? 2000 : 1900;
   }
   // Validate parts are reasonable
   if (!y || !m || !d || m < 1 || m > 12 || d < 1 || d > 31) return 0;
-  // Use Date.UTC to avoid browser-dependent parsing
   return Date.UTC(y, m - 1, d);
 }
 
