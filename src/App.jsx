@@ -2117,6 +2117,7 @@ export default function App() {
   const [serviceModal, setServiceModal] = useState(null);
   const [showFlags, setShowFlags] = useState(false);
   const [showAiReview, setShowAiReview] = useState(false);
+  const [showAiFlags, setShowAiFlags] = useState(false);
   const [resolvedFlags, setResolvedFlags] = useState({}); // { "flagId": { by, note, at } }
   const [flagsFilter, setFlagsFilter] = useState("open"); // "open" | "resolved" | "all"
   const [replyingFlag, setReplyingFlag] = useState(null); // flagId currently being responded to
@@ -4393,7 +4394,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                 <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", letterSpacing: "0.03em" }}>{rego}</span>
                                 {dangerCount > 0 && <span onClick={(ev) => { ev.stopPropagation(); setShowFlags(true); setFlagsFilter("open"); }} className="flag-badge flag-danger" style={{ cursor: "pointer" }}>{"\u26A0"} {dangerCount}</span>}
                                 {warnCount > 0 && <span onClick={(ev) => { ev.stopPropagation(); setShowFlags(true); setFlagsFilter("open"); }} className="flag-badge flag-warn" style={{ cursor: "pointer" }}>{"\u26A1"} {warnCount}</span>}
-                                {aiCount > 0 && <span onClick={(ev) => { ev.stopPropagation(); setShowAiReview(true); window.scrollTo({ top: 0, behavior: "smooth" }); }} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: 10, fontSize: 10, fontWeight: 700, background: "#ede9fe", color: "#7c3aed", border: "1px solid #c4b5fd", cursor: "pointer" }}>{"\uD83E\uDD16"} {aiCount}</span>}
+                                {aiCount > 0 && <span onClick={(ev) => { ev.stopPropagation(); setShowAiFlags(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: 10, fontSize: 10, fontWeight: 700, background: "#ede9fe", color: "#7c3aed", border: "1px solid #c4b5fd", cursor: "pointer" }}>{"\uD83E\uDD16"} {aiCount}</span>}
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 {vehicleTotalCost > 0 && <span style={{ fontSize: 13, fontWeight: 700, color: "#16a34a" }}>${vehicleTotalCost.toFixed(2)}</span>}
@@ -5691,6 +5692,145 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     );
   };
 
+  // ── AI Flags Modal ──────────────────────────────────────────────────────
+  const renderAiFlagsModal = () => {
+    if (!showAiFlags) return null;
+    const fleet = fleetAnalysis;
+    const allAiFlags = fleet.flatMap(v => v.flags.filter(f => f.category === "ai" && (f.type === "danger" || f.type === "warn")));
+    const flagsWithId = allAiFlags.map(f => ({ ...f, _id: flagId(f) }));
+    const openFlags = flagsWithId.filter(f => !resolvedFlags[f._id]);
+    const doneFlags = flagsWithId.filter(f => resolvedFlags[f._id]);
+    const visibleFlags = flagsFilter === "open" ? openFlags : flagsFilter === "resolved" ? doneFlags : flagsWithId;
+
+    return (
+      <div style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
+        alignItems: "flex-start", justifyContent: "center", zIndex: 100, padding: "40px 16px",
+        overflowY: "auto",
+      }} onClick={() => setShowAiFlags(false)}>
+        <div onClick={e => e.stopPropagation()} style={{
+          background: "white", borderRadius: 14, padding: 24, width: "100%", maxWidth: 640,
+          boxShadow: "0 20px 60px rgba(0,0,0,0.2)", maxHeight: "85vh", overflowY: "auto",
+        }} className="fade-in">
+          {/* Header */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#7c3aed" }}>{"\uD83E\uDD16"} AI Scan Issues</div>
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                {openFlags.length} to review {"\u00B7"} {doneFlags.length} resolved
+              </div>
+            </div>
+            <button onClick={() => setShowAiFlags(false)} style={{
+              background: "none", border: "none", fontSize: 24, color: "#94a3b8", cursor: "pointer", lineHeight: 1,
+            }}>{"\u00D7"}</button>
+          </div>
+
+          {/* Progress bar */}
+          {flagsWithId.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
+                <span>{doneFlags.length} of {flagsWithId.length} reviewed</span>
+                <span style={{ fontWeight: 600, color: doneFlags.length === flagsWithId.length ? "#15803d" : "#7c3aed" }}>
+                  {flagsWithId.length > 0 ? Math.round((doneFlags.length / flagsWithId.length) * 100) : 0}%
+                </span>
+              </div>
+              <div style={{ height: 6, background: "#f1f5f9", borderRadius: 3, overflow: "hidden" }}>
+                <div style={{
+                  height: "100%", borderRadius: 3, transition: "width 0.3s",
+                  width: `${flagsWithId.length > 0 ? (doneFlags.length / flagsWithId.length) * 100 : 0}%`,
+                  background: doneFlags.length === flagsWithId.length ? "#16a34a" : "#7c3aed",
+                }} />
+              </div>
+            </div>
+          )}
+
+          {/* Filter tabs */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+            {[
+              { key: "open", label: `To Review (${openFlags.length})` },
+              { key: "resolved", label: `Resolved (${doneFlags.length})` },
+              { key: "all", label: `All (${flagsWithId.length})` },
+            ].map(tab => (
+              <button key={tab.key} onClick={() => setFlagsFilter(tab.key)} style={{
+                padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: flagsFilter === tab.key ? 700 : 500,
+                cursor: "pointer", fontFamily: "inherit",
+                background: flagsFilter === tab.key ? "#7c3aed" : "#f8fafc",
+                color: flagsFilter === tab.key ? "white" : "#64748b",
+                border: `1px solid ${flagsFilter === tab.key ? "#7c3aed" : "#e2e8f0"}`,
+              }}>{tab.label}</button>
+            ))}
+          </div>
+
+          {/* Flag list */}
+          {visibleFlags.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: flagsFilter === "open" ? "#15803d" : "#94a3b8" }}>
+              <div style={{ fontSize: 36, marginBottom: 8 }}>{flagsFilter === "open" ? "\u2713" : "\uD83E\uDD16"}</div>
+              <div style={{ fontWeight: 600 }}>
+                {flagsFilter === "open" ? "All AI flags reviewed!" : flagsFilter === "resolved" ? "No resolved flags yet." : "No AI flags found."}
+              </div>
+            </div>
+          ) : (
+            visibleFlags.map(f => {
+              const isResolved = !!resolvedFlags[f._id];
+              const resolution = resolvedFlags[f._id];
+              return (
+                <div key={f._id} style={{
+                  padding: "10px 12px", marginBottom: 8, borderRadius: 8,
+                  background: isResolved ? "#f8fafc" : f.type === "danger" ? "#faf5ff" : "#fffbeb",
+                  border: `1px solid ${isResolved ? "#e2e8f0" : f.type === "danger" ? "#c4b5fd" : "#fcd34d"}`,
+                  opacity: isResolved ? 0.7 : 1,
+                }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 700, color: "#0f172a", fontSize: 12 }}>{f.rego}</span>
+                        <span style={{
+                          fontWeight: 600, fontSize: 11, color: isResolved ? "#64748b" : "#7c3aed",
+                          textDecoration: isResolved ? "line-through" : "none",
+                        }}>{f.text}</span>
+                        <span style={{ color: "#94a3b8", fontSize: 10 }}>{f.date || ""}</span>
+                      </div>
+                      <div style={{ color: "#64748b", fontSize: 10, marginTop: 2 }}>{f.detail}</div>
+                      {isResolved && resolution && (
+                        <div style={{ marginTop: 6, padding: "4px 8px", background: "#f0fdf4", borderRadius: 4, border: "1px solid #bbf7d0", fontSize: 10 }}>
+                          <span style={{ color: "#15803d", fontWeight: 600 }}>{"\u2713"} Reviewed by {resolution.by}</span>
+                          {resolution.note && <div style={{ color: "#374151", marginTop: 2 }}>{resolution.note}</div>}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      {!isResolved && f._entry && (
+                        <button onClick={() => { setEditingEntry(f._entry); setShowAiFlags(false); }} style={{
+                          padding: "4px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                          background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe",
+                          cursor: "pointer", fontFamily: "inherit",
+                        }}>{"\u270E"} Edit</button>
+                      )}
+                      {!isResolved && (
+                        <button onClick={() => resolveFlag(f._id, "Reviewed — no action needed", "Admin")} style={{
+                          padding: "4px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                          background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac",
+                          cursor: "pointer", fontFamily: "inherit",
+                        }}>{"\u2713"} OK</button>
+                      )}
+                      {isResolved && (
+                        <button onClick={() => unresolveFlag(f._id)} style={{
+                          padding: "4px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                          background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0",
+                          cursor: "pointer", fontFamily: "inherit",
+                        }}>Undo</button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // ── Fleet Card Summary ───────────────────────────────────────────────────
   const renderCards = () => {
     // Parse month filter
@@ -6351,6 +6491,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         />
       )}
       {renderFlagsModal()}
+      {renderAiFlagsModal()}
       {editingVehicle && (() => {
         const veEntries = entries.filter(e => e.registration === editingVehicle);
         const latest = veEntries[veEntries.length - 1];
