@@ -4364,8 +4364,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                       });
                       // Filter out resolved flags
                       const openVehicleFlags = vehicleFlags.filter(f => !resolvedFlags[flagId(f)]);
-                      const dangerCount = openVehicleFlags.filter(f => f.type === "danger").length;
-                      const warnCount = openVehicleFlags.filter(f => f.type === "warn").length;
+                      const dangerCount = openVehicleFlags.filter(f => f.category === "ops" && f.type === "danger").length;
+                      const warnCount = openVehicleFlags.filter(f => f.category === "ops" && f.type === "warn").length;
+                      const aiCount = openVehicleFlags.filter(f => f.category === "ai" && (f.type === "danger" || f.type === "warn")).length;
                       // Service overdue only shows red if not resolved
                       const serviceOverdueResolved = isOverdue && vehicleFlags.filter(f => f.text === "SERVICE OVERDUE").every(f => resolvedFlags[flagId(f)]);
                       const showOverdueHighlight = isOverdue && !serviceOverdueResolved;
@@ -4387,6 +4388,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                 <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", letterSpacing: "0.03em" }}>{rego}</span>
                                 {dangerCount > 0 && <span className="flag-badge flag-danger">{"\u26A0"} {dangerCount}</span>}
                                 {warnCount > 0 && <span className="flag-badge flag-warn">{"\u26A1"} {warnCount}</span>}
+                                {aiCount > 0 && <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: 10, fontSize: 10, fontWeight: 700, background: "#ede9fe", color: "#7c3aed", border: "1px solid #c4b5fd" }}>{"\uD83E\uDD16"} {aiCount}</span>}
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 {vehicleTotalCost > 0 && <span style={{ fontSize: 13, fontWeight: 700, color: "#16a34a" }}>${vehicleTotalCost.toFixed(2)}</span>}
