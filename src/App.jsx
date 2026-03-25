@@ -2666,7 +2666,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     }));
   };
 
-  const EQUIPMENT_PRESETS = ["Chainsaws", "2 Stroke Fuel", "Jerry Can", "Engine Oil", "Stump Grinder", "Fuel Cell/Pod", "Leaf Blower", "AdBlue", "Hire Equipment"];
+  const EQUIPMENT_PRESETS = ["Chainsaws", "2 Stroke Fuel", "Jerry Can", "Engine Oil", "Engine & Bar Oil", "Stump Grinder", "Fuel Cell/Pod", "Leaf Blower", "AdBlue", "Hire Equipment"];
 
 // Equipment types that consume FUEL (not oil/adblue) — used to match "other" splits to fuel lines vs otherItems
 const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|fuel.?pod|mower|hedger|adblue/i;
