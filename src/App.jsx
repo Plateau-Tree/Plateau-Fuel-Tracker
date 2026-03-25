@@ -4105,13 +4105,18 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             { label: "Entries", value: entries.length, color: "#16a34a" },
             { label: "Total Spend", value: `$${totalSpend.toFixed(0)}`, color: "#16a34a" },
             { label: "Vehicles", value: regoCount, color: "#16a34a" },
-            { label: "Flags", value: totalFlags, color: totalFlags > 0 ? "#dc2626" : "#16a34a" },
           ].map(s => (
             <div key={s.label} style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 8px", textAlign: "center" }}>
               <div style={{ fontSize: 20, fontWeight: 700, color: s.color }}>{s.value}</div>
               <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2, fontWeight: 500 }}>{s.label}</div>
             </div>
           ))}
+          {/* Flags button — clickable to open issues */}
+          <div onClick={() => { if (totalFlags > 0) { setShowFlags(true); setFlagsFilter("open"); } }}
+            style={{ background: "white", border: `1px solid ${totalFlags > 0 ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "10px 8px", textAlign: "center", cursor: totalFlags > 0 ? "pointer" : "default", transition: "all 0.15s" }}>
+            <div style={{ fontSize: 20, fontWeight: 700, color: totalFlags > 0 ? "#dc2626" : "#16a34a" }}>{totalFlags > 0 ? "\u26A0" : "\u2713"} {totalFlags}</div>
+            <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2, fontWeight: 500 }}>Flags</div>
+          </div>
         </div>
 
         {/* AI Review Banner */}
@@ -4386,9 +4391,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", letterSpacing: "0.03em" }}>{rego}</span>
-                                {dangerCount > 0 && <span className="flag-badge flag-danger">{"\u26A0"} {dangerCount}</span>}
-                                {warnCount > 0 && <span className="flag-badge flag-warn">{"\u26A1"} {warnCount}</span>}
-                                {aiCount > 0 && <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: 10, fontSize: 10, fontWeight: 700, background: "#ede9fe", color: "#7c3aed", border: "1px solid #c4b5fd" }}>{"\uD83E\uDD16"} {aiCount}</span>}
+                                {dangerCount > 0 && <span onClick={(ev) => { ev.stopPropagation(); setShowFlags(true); setFlagsFilter("open"); }} className="flag-badge flag-danger" style={{ cursor: "pointer" }}>{"\u26A0"} {dangerCount}</span>}
+                                {warnCount > 0 && <span onClick={(ev) => { ev.stopPropagation(); setShowFlags(true); setFlagsFilter("open"); }} className="flag-badge flag-warn" style={{ cursor: "pointer" }}>{"\u26A1"} {warnCount}</span>}
+                                {aiCount > 0 && <span onClick={(ev) => { ev.stopPropagation(); setShowAiReview(true); window.scrollTo({ top: 0, behavior: "smooth" }); }} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: 10, fontSize: 10, fontWeight: 700, background: "#ede9fe", color: "#7c3aed", border: "1px solid #c4b5fd", cursor: "pointer" }}>{"\uD83E\uDD16"} {aiCount}</span>}
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 {vehicleTotalCost > 0 && <span style={{ fontSize: 13, fontWeight: 700, color: "#16a34a" }}>${vehicleTotalCost.toFixed(2)}</span>}
