@@ -483,7 +483,11 @@ Return ONLY valid JSON with no other text:
   "cardNumber": "full 16 digit fleet card number FROM PHYSICAL CARD or null",
   "vehicleOnCard": "registration from physical fleet card or null",
   "odometer": number_odometer_reading_or_null,
-  "handwrittenNotes": "any handwritten text visible or null"
+  "handwrittenNotes": "any handwritten text visible or null",
+  "confidence": {
+    "overall": "high|medium|low — your overall confidence in the accuracy of this scan",
+    "issues": ["list of specific concerns, e.g. 'blurry text near total', 'partially obscured card number', 'handwriting hard to read', 'date partially cut off', 'unsure if litres is 8.09 or 80.9'"]
+  }
 }
 
 RULES:
@@ -493,7 +497,8 @@ RULES:
 - "litres" is the total of fuel lines ONLY (not other items).
 - "cardNumber" must be null unless you can see the PHYSICAL CARD with 16 digits in the image.
 - If no fleet card is visible, set cardNumber and vehicleOnCard to null.
-- If no odometer is visible, set odometer to null.`;
+- If no odometer is visible, set odometer to null.
+- CONFIDENCE: Rate "high" if image is clear and all values are readable. Rate "medium" if some text is blurry, partially obscured, or you had to guess between similar characters (0/O, 1/I, 5/S, 8/B, D/0). Rate "low" if the image is very blurry, upside down, or large portions are unreadable. Always list specific concerns in "issues" — be honest about anything you're unsure of.`;
 
 // Normalize receipt data: ensure lines array exists and totals are consistent
 function normalizeReceiptData(data) {
@@ -1817,6 +1822,52 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
   const ppl = entry.pricePerLitre;
   const totalCost = entry.totalCost;
 
+  // ── AI Confidence Flags ──
+  if (entry._aiConfidence === "low") {
+    flags.push({ type: "danger", text: "AI low confidence", detail: `The scanner was unsure about this receipt. Issues: ${(entry._aiIssues || []).join(", ") || "unclear image"}` });
+  } else if (entry._aiConfidence === "medium") {
+    flags.push({ type: "warn", text: "AI uncertain", detail: `Some values may be inaccurate. Issues: ${(entry._aiIssues || []).join(", ") || "partially unclear"}` });
+  }
+
+  // ── Data Quality Flags ──
+  // Registration looks suspicious (too short, too long, or has unusual characters)
+  const rego = entry.registration || "";
+  if (rego && (rego.length < 4 || rego.length > 8)) {
+    flags.push({ type: "warn", text: "Unusual rego format", detail: `"${rego}" — expected 4-8 characters` });
+  }
+
+  // Driver name looks suspicious (single character, numbers in name)
+  const driverName = entry.driverName || "";
+  if (driverName && (/\d/.test(driverName))) {
+    flags.push({ type: "warn", text: "Numbers in driver name", detail: `"${driverName}" contains digits — possible typo` });
+  }
+  if (driverName && driverName.split(" ").some(p => p.length === 1 && p !== "&")) {
+    flags.push({ type: "info", text: "Short name part", detail: `"${driverName}" — check first/last name is complete` });
+  }
+
+  // Unusually high litres (over 200L is unusual for most vehicles)
+  if (litres > 300) {
+    flags.push({ type: "warn", text: "Very high litres", detail: `${litres}L — verify this is correct` });
+  }
+
+  // Fuel price outside reasonable range (AUD $1.00 - $3.50 per litre as of 2024-2026)
+  if (ppl && (ppl < 1.0 || ppl > 3.50)) {
+    flags.push({ type: "warn", text: "Unusual fuel price", detail: `$${ppl}/L — expected $1.00-$3.50/L` });
+  }
+
+  // Date in the future
+  if (entry.date) {
+    const entryDate = parseDate(entry.date);
+    if (entryDate && new Date(entryDate) > new Date()) {
+      flags.push({ type: "danger", text: "Future date", detail: `${entry.date} is in the future — likely misread` });
+    }
+  }
+
+  // Rego doesn't match fleet card rego
+  if (rego && entry.fleetCardVehicle && rego !== entry.fleetCardVehicle && entry.fleetCardVehicle.length > 2) {
+    flags.push({ type: "info", text: "Rego ≠ card rego", detail: `Vehicle "${rego}" but card shows "${entry.fleetCardVehicle}"` });
+  }
+
   let kmTravelled = null;
   if (prevOdo != null && odo != null) {
     kmTravelled = odo - prevOdo;
@@ -2339,6 +2390,8 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         fuelType: baseFuelType,
         notes: otherForm.notes.trim(),
         hasReceipt: !!receiptB64,
+        _aiConfidence: receiptData?.confidence?.overall || null,
+        _aiIssues: receiptData?.confidence?.issues || [],
       };
       await persist([...entries, otherEntry], otherEntry);
       if (receiptB64) await saveReceiptImage(otherEntry.id, receiptB64, receiptMime);
@@ -2378,6 +2431,8 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         vehicleName: regoMatch?.n || "",
         splitReceipt: splitMode || false,
         hasReceipt: !!receiptB64,
+        _aiConfidence: receiptData?.confidence?.overall || null,
+        _aiIssues: receiptData?.confidence?.issues || [],
       };
     };
 
@@ -4443,7 +4498,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       const flags = [];
       regoEntries.forEach((e, i) => {
         const prev = i > 0 ? regoEntries[i - 1] : null;
-        getEntryFlags(e, prev, vt, serviceData[rego]).forEach(f => flags.push({ ...f, rego, date: e.date, odo: e.odometer }));
+        getEntryFlags(e, prev, vt, serviceData[rego]).forEach(f => flags.push({ ...f, rego, date: e.date, odo: e.odometer, _entryId: e.id, _entry: e }));
       });
 
       // Fuel cost totals
@@ -5193,12 +5248,17 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
     // Group by type of issue
     const groupFlags = (list) => {
+      const ai = list.filter(f => f.text.includes("AI ") || f.text.includes("confidence"));
+      const data = list.filter(f => f.text.includes("rego format") || f.text.includes("driver name") || f.text.includes("Numbers in") || f.text.includes("Short name") || f.text.includes("Future date") || f.text.includes("card rego"));
       const svc = list.filter(f => f.text.includes("SERVICE") || f.text.includes("Service"));
-      const fuel = list.filter(f => f.text.includes("fuel") || f.text.includes("Fuel"));
-      const cost = list.filter(f => f.text.includes("Cost") || f.text.includes("cost"));
+      const fuel = list.filter(f => f.text.includes("fuel") || f.text.includes("Fuel") || f.text.includes("litres") || f.text.includes("Litres") || f.text.includes("price"));
+      const cost = list.filter(f => f.text.includes("Cost") || f.text.includes("cost") || f.text.includes("variance"));
       const odo = list.filter(f => f.text.includes("Odo") || f.text.includes("km"));
-      const other = list.filter(f => !svc.includes(f) && !fuel.includes(f) && !cost.includes(f) && !odo.includes(f));
+      const matched = [...ai, ...data, ...svc, ...fuel, ...cost, ...odo];
+      const other = list.filter(f => !matched.includes(f));
       return [
+        { title: "AI Scan Concerns", icon: "\uD83E\uDD16", flags: ai, color: "#7c3aed" },
+        { title: "Data Quality Issues", icon: "\u26A0\uFE0F", flags: data, color: "#dc2626" },
         { title: "Service Required", icon: "\uD83D\uDD27", flags: svc, color: "#b91c1c" },
         { title: "Fuel Consumption Issues", icon: "\u26FD", flags: fuel, color: "#b45309" },
         { title: "Cost Discrepancies", icon: "\uD83D\uDCB0", flags: cost, color: "#b45309" },
@@ -5260,14 +5320,23 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               )}
             </div>
 
-            {/* Quick resolve (no note) */}
-            {!isResolved && !isReplying && (
-              <button onClick={() => setReplyingFlag(f._id)} style={{
-                padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600,
-                background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0",
-                cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
-              }}>Respond</button>
-            )}
+            {/* Action buttons */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+              {!isResolved && !isReplying && (
+                <button onClick={() => setReplyingFlag(f._id)} style={{
+                  padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                  background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0",
+                  cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                }}>Respond</button>
+              )}
+              {f._entry && (
+                <button onClick={() => { setEditingEntry(f._entry); setShowFlags(false); }} style={{
+                  padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                  background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe",
+                  cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                }}>{"\u270E"} Edit</button>
+              )}
+            </div>
           </div>
         </div>
       );
