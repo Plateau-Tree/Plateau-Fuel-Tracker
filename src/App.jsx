@@ -1863,10 +1863,6 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
     }
   }
 
-  // Rego doesn't match fleet card rego
-  if (rego && entry.fleetCardVehicle && rego !== entry.fleetCardVehicle && entry.fleetCardVehicle.length > 2) {
-    flags.push({ type: "info", text: "Rego ≠ card rego", detail: `Vehicle "${rego}" but card shows "${entry.fleetCardVehicle}"` });
-  }
 
   let kmTravelled = null;
   if (prevOdo != null && odo != null) {
@@ -5249,7 +5245,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     // Group by type of issue
     const groupFlags = (list) => {
       const ai = list.filter(f => f.text.includes("AI ") || f.text.includes("confidence"));
-      const data = list.filter(f => f.text.includes("rego format") || f.text.includes("driver name") || f.text.includes("Numbers in") || f.text.includes("Short name") || f.text.includes("Future date") || f.text.includes("card rego"));
+      const data = list.filter(f => f.text.includes("rego format") || f.text.includes("driver name") || f.text.includes("Numbers in") || f.text.includes("Short name") || f.text.includes("Future date"));
       const svc = list.filter(f => f.text.includes("SERVICE") || f.text.includes("Service"));
       const fuel = list.filter(f => f.text.includes("fuel") || f.text.includes("Fuel") || f.text.includes("litres") || f.text.includes("Litres") || f.text.includes("price"));
       const cost = list.filter(f => f.text.includes("Cost") || f.text.includes("cost") || f.text.includes("variance"));
