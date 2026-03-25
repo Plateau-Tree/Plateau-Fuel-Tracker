@@ -2711,7 +2711,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       if (field === "rego" && s.splitType === "vehicle") {
         const match = lookupRego(value, learnedDBRef.current, entriesRef.current);
         updated._match = match || null;
-        if (match) { updated.division = match.d; updated.vehicleType = match.t; }
+        if (match) {
+          updated.rego = match.r || value; // Auto-fill full rego
+          updated.division = match.d;
+          updated.vehicleType = match.t;
+        }
       }
       return updated;
     }));
@@ -3018,7 +3022,9 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
             const db = learnedDBRef.current;
             const match = lookupRego(v, db, entriesRef.current);
             if (match) {
-              setForm(f => ({ ...f, registration: v, vehicleType: match.t, division: match.d, _regoMatch: match }));
+              // Auto-fill the full rego if user typed a partial match (4+ chars) and we found the vehicle
+              const fullRego = match.r || v;
+              setForm(f => ({ ...f, registration: fullRego, vehicleType: match.t, division: match.d, _regoMatch: match }));
             } else {
               const vt = guessType(v, db, entriesRef.current);
               if (vt) {
