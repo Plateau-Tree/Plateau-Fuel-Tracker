@@ -1035,7 +1035,7 @@ async function claudeScan(apiKey, b64, mime, prompt) {
     },
     body: JSON.stringify({
       model: "claude-opus-4-20250514",
-      max_tokens: 1000,
+      max_tokens: 2000,
       messages: [{
         role: "user",
         content: [
@@ -1050,13 +1050,18 @@ async function claudeScan(apiKey, b64, mime, prompt) {
     throw new Error(err?.error?.message || `API error ${resp.status}`);
   }
   const d = await resp.json();
-  const raw = (d.content?.[0]?.text || "{}").replace(/```json\n?|```/g, "").trim();
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    console.error("Failed to parse AI response:", raw);
-    throw new Error("AI returned an unreadable response — please try scanning again");
+  const rawText = d.content?.[0]?.text || "{}";
+  // Strip markdown code fences
+  let raw = rawText.replace(/```json\n?|```/g, "").trim();
+  // Try direct parse first
+  try { return JSON.parse(raw); } catch (_) {}
+  // Opus may wrap JSON in extra text — extract the JSON object
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try { return JSON.parse(jsonMatch[0]); } catch (_) {}
   }
+  console.error("Failed to parse AI response:", raw);
+  throw new Error("AI returned an unreadable response — please try scanning again");
 }
 
 function parseDate(str) {
