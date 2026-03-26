@@ -522,7 +522,8 @@ Return ONLY valid JSON with no other text:
 }
 
 RULES:
-- "lines" array must ONLY contain actual fuel dispensed. If 2 fuel types were pumped, return 2 lines. Never include discounts as a line.
+- "lines" array must ONLY contain actual FUEL dispensed (petrol, diesel, premium, unleaded, etc.). If 2 fuel types were pumped, return 2 lines. Never include discounts as a line.
+- CRITICAL: AdBlue is NOT fuel — it is a diesel exhaust fluid. AdBlue MUST go in "otherItems", NEVER in "lines". Same for DEF (Diesel Exhaust Fluid). If a receipt has AdBlue and Diesel, the Diesel goes in "lines" and the AdBlue goes in "otherItems".
 - CRITICAL: pricePerLitre must ALWAYS be in DOLLARS, not cents. Australian receipts often show price in cents per litre (e.g. "274.9 c/L" or "274.90c/L" or "@ 274.9"). If the price looks like it's in cents (typically 100-400 range for fuel), DIVIDE BY 100 to convert to dollars. Example: "274.9 c/L" = 2.749 dollars per litre. "189.9c/L" = 1.899 dollars per litre. Australian fuel typically costs between $1.00 and $4.00 per litre — any value outside this range is almost certainly in cents.
 - CRITICAL: Each line MUST have its OWN fuelType and pricePerLitre extracted from the receipt. Do NOT copy the same fuel type to all lines. Example: if line 1 says "PREMIUM DIESEL @ $2.049/L" and line 2 says "PREMIUM 95 @ $1.919/L", then line 1 fuelType is "Premium Diesel" and line 2 fuelType is "Premium 95" — they are DIFFERENT fuels with DIFFERENT prices.
 - "otherItems" lists non-fuel products (oil, AdBlue, etc.) with the EXACT description as printed. Empty array [] if none. Do NOT include fleet card surcharges, card fees, or transaction fees — these are standard station charges and should be ignored entirely.
@@ -547,6 +548,27 @@ function normalizeReceiptData(data) {
     if (/surcharge|card\s*fee|transaction\s*fee|fleet\s*card|eftpos\s*fee|merchant\s*fee/i.test(desc)) return false;
     return true;
   });
+
+  // Move AdBlue/DEF from fuel lines to otherItems (AdBlue is NOT fuel)
+  const adblueLines = data.lines.filter(line => {
+    const ft = (line.fuelType || "").toLowerCase();
+    return /adblue|ad\s*blue|def\b|diesel\s*exhaust/i.test(ft);
+  });
+  if (adblueLines.length > 0) {
+    data.lines = data.lines.filter(line => {
+      const ft = (line.fuelType || "").toLowerCase();
+      return !/adblue|ad\s*blue|def\b|diesel\s*exhaust/i.test(ft);
+    });
+    adblueLines.forEach(ab => {
+      data.otherItems.push({
+        description: ab.fuelType || "AdBlue",
+        cost: ab.cost || null,
+        quantity: ab.litres ? `${ab.litres}L` : null,
+        litres: ab.litres,
+        pricePerLitre: ab.pricePerLitre,
+      });
+    });
+  }
 
   // Filter out discount/surcharge/non-fuel lines that the AI might have included
   data.lines = data.lines.filter(line => {
@@ -4019,17 +4041,45 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       );
     }
 
-    // ── Vehicle mode review — match scanned lines to entries in order ──
+    // ── Vehicle mode review — smart match scanned lines to vehicles ──
     const scannedLines = receiptData?.lines || [];
     const scannedOtherItems = receiptData?.otherItems || [];
     const regoMatch = form._regoMatch;
     const globalPpl = receiptData?.pricePerLitre;
 
-    // Build matched preview data in same order as handleSubmit
-    let lineIdx = 0;
+    // Smart match: build vehicles list, match by litres/type
     let otherItemIdx = 0;
+    let primaryLine = null;
+    const availableLinesForReview = [...scannedLines];
 
-    const primaryLine = splitMode && scannedLines[lineIdx] ? scannedLines[lineIdx++] : null;
+    if (splitMode && availableLinesForReview.length > 0) {
+      const primaryType = regoMatch?.t || form.vehicleType || "Other";
+      const userLitresInput = parseFloat(form.litres) || 0;
+
+      // Try to match by user-entered litres first (most reliable)
+      if (userLitresInput > 0) {
+        let bestIdx = 0, bestDiff = Infinity;
+        availableLinesForReview.forEach((l, i) => {
+          const diff = Math.abs((l.litres || 0) - userLitresInput);
+          if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+        });
+        primaryLine = availableLinesForReview.splice(bestIdx, 1)[0];
+      } else {
+        // No user litres — match by vehicle size (largest vehicle gets highest litres)
+        const rank = VEHICLE_FUEL_RANK[primaryType] || 99;
+        if (rank <= 5) {
+          // Large vehicle — get the line with most litres
+          const sorted = availableLinesForReview.map((l, i) => ({ l, i })).sort((a, b) => (b.l.litres || 0) - (a.l.litres || 0));
+          primaryLine = availableLinesForReview.splice(sorted[0].i, 1)[0];
+        } else {
+          // Small vehicle/equipment — get the line with least litres
+          const sorted = availableLinesForReview.map((l, i) => ({ l, i })).sort((a, b) => (a.l.litres || 0) - (b.l.litres || 0));
+          primaryLine = availableLinesForReview.splice(sorted[0].i, 1)[0];
+        }
+      }
+    } else if (!splitMode) {
+      primaryLine = null; // non-split uses receiptData directly
+    }
     const primaryFuelType = primaryLine?.fuelType || receiptData?.fuelType || regoMatch?.f || "";
     const primaryLitres = splitMode
       ? (form.litres || primaryLine?.litres?.toString() || "0")
@@ -4084,7 +4134,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     ];
     const hasCardData = !!(cardData?.cardNumber || regoMatch?.c);
 
-    // Pre-compute matched data for each split
+    // Pre-compute matched data for each split — smart match by litres/type
     const splitPreviews = splits.map(sp => {
       const isOther = sp.splitType === "other";
       const isFuelOther = isOther && FUEL_EQUIPMENT_RE.test(sp.equipment);
@@ -4094,8 +4144,30 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         const item = scannedOtherItems[otherItemIdx++];
         return { ...sp, _matchedItem: item, _matchedLine: null, _isFuelOther: false };
       } else if ((isOther && isFuelOther) || !isOther) {
-        // Fuel-type (vehicle or fuel-other like jerry can) → match to next fuel line
-        const line = lineIdx < scannedLines.length ? scannedLines[lineIdx++] : null;
+        // Fuel-type — smart match from remaining available lines
+        let line = null;
+        if (availableLinesForReview.length > 0) {
+          const spLitres = parseFloat(sp.litres) || 0;
+          const spType = sp.vehicleType || sp._match?.t || "Other";
+
+          if (spLitres > 0) {
+            // Match by user-entered litres (closest match)
+            let bestIdx = 0, bestDiff = Infinity;
+            availableLinesForReview.forEach((l, i) => {
+              const diff = Math.abs((l.litres || 0) - spLitres);
+              if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+            });
+            line = availableLinesForReview.splice(bestIdx, 1)[0];
+          } else if (availableLinesForReview.length > 1) {
+            // Match by vehicle size
+            const rank = VEHICLE_FUEL_RANK[spType] || 99;
+            const sorted = availableLinesForReview.map((l, i) => ({ l, i })).sort((a, b) => (b.l.litres || 0) - (a.l.litres || 0));
+            const pickIdx = rank <= 5 ? sorted[0].i : sorted[sorted.length - 1].i;
+            line = availableLinesForReview.splice(pickIdx, 1)[0];
+          } else {
+            line = availableLinesForReview.shift();
+          }
+        }
         return { ...sp, _matchedLine: line, _matchedItem: null, _isFuelOther: isFuelOther };
       }
       return { ...sp, _matchedLine: null, _matchedItem: null, _isFuelOther: false };
