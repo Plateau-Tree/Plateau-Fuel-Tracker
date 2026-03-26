@@ -2377,6 +2377,25 @@ export default function App() {
     persistResolved(rest, fid, true);
   };
 
+  // Learn fleet card ↔ rego association immediately when user edits card data on Steps 2/3
+  // This ensures future scans benefit from manual corrections without waiting for submission
+  const learnFleetCardCorrection = useCallback((cardNumber, cardRego) => {
+    if (!cardRego || !cardNumber) return;
+    const rego = cardRego.toUpperCase().replace(/\s+/g, "");
+    const card = cardNumber.replace(/\s/g, "");
+    if (!rego || !card || card.length < 10) return;
+
+    const currentDB = learnedDBRef.current;
+    const existing = currentDB[rego] || {};
+
+    // Only update if the card number actually changed
+    if (existing.c === card) return;
+
+    const updated = { ...existing, c: card };
+    const newLearned = { ...currentDB, [rego]: updated };
+    persistLearned(newLearned);
+  }, []);
+
   // Learn from every submission — driver corrections override the static spreadsheet DB
   const learnFromSubmission = (entry) => {
     const rego = entry.registration;
@@ -3828,8 +3847,12 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           </div>
           <button onClick={() => {
             if (manualCardNum || manualCardRego) {
-              setCardData({ cardNumber: manualCardNum.replace(/\s/g, "") || null, vehicleOnCard: manualCardRego.trim().toUpperCase() || null });
-              showToast("Fleet card details saved");
+              const cleanCard = manualCardNum.replace(/\s/g, "");
+              const cleanRego = manualCardRego.trim().toUpperCase();
+              setCardData({ cardNumber: cleanCard || null, vehicleOnCard: cleanRego || null });
+              // Learn this card ↔ rego association for future scans
+              if (cleanCard && cleanRego) learnFleetCardCorrection(cleanCard, cleanRego);
+              showToast("Fleet card details saved & learned for future scans");
             }
           }} style={{
             marginTop: 8, padding: "6px 14px", borderRadius: 6, fontSize: 11, fontWeight: 600,
@@ -3894,8 +3917,18 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               { label: "Division", val: otherForm.division, set: v => setOtherForm(f => ({...f, division: v})) },
               { label: "Equipment", val: otherForm.equipment, set: v => setOtherForm(f => ({...f, equipment: v})) },
               { label: "Station", val: otherForm.station || receiptData?.station || "", set: v => setOtherForm(f => ({...f, station: v})) },
-              { label: "Fleet Card", val: cardData?.cardNumber || otherForm.fleetCard || "", set: v => setCardData(d => ({...(d || {}), cardNumber: v.replace(/\s/g, "")})) },
-              { label: "Card Rego", val: cardData?.vehicleOnCard || otherForm.cardRego || "", set: v => setCardData(d => ({...(d || {}), vehicleOnCard: v.toUpperCase()})) },
+              { label: "Fleet Card", val: cardData?.cardNumber || otherForm.fleetCard || "", set: v => {
+                const cleanCard = v.replace(/\s/g, "");
+                setCardData(d => ({...(d || {}), cardNumber: cleanCard}));
+                const rego = cardData?.vehicleOnCard || otherForm.cardRego;
+                if (rego && cleanCard.length >= 10) learnFleetCardCorrection(cleanCard, rego);
+              }},
+              { label: "Card Rego", val: cardData?.vehicleOnCard || otherForm.cardRego || "", set: v => {
+                const cleanRego = v.toUpperCase().replace(/[^A-Z0-9]/g, "");
+                setCardData(d => ({...(d || {}), vehicleOnCard: cleanRego}));
+                const card = cardData?.cardNumber || otherForm.fleetCard;
+                if (card && card.length >= 10 && cleanRego) learnFleetCardCorrection(card, cleanRego);
+              }},
               { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v})) },
               { label: "Litres", val: receiptData?._rawLitres || receiptData?.litres?.toString() || "", set: v => setReceiptData(d => ({...d, litres: v, _rawLitres: v})) },
               { label: "$/L", val: receiptData?._rawPpl || receiptData?.pricePerLitre?.toString() || "", set: v => setReceiptData(d => ({...d, pricePerLitre: v, _rawPpl: v})) },
@@ -3964,8 +3997,20 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     ];
 
     const cardRows = [
-      { label: "Card Number", val: cardData?.cardNumber || regoMatch?.c || "", set: v => setCardData(d => ({...(d || {}), cardNumber: v.replace(/\s/g, "")})) },
-      { label: "Card Rego", val: cardData?.vehicleOnCard || "", set: v => setCardData(d => ({...(d || {}), vehicleOnCard: v.toUpperCase()})) },
+      { label: "Card Number", val: cardData?.cardNumber || regoMatch?.c || "", set: v => {
+        const cleanCard = v.replace(/\s/g, "");
+        setCardData(d => ({...(d || {}), cardNumber: cleanCard}));
+        // Learn this card ↔ rego association if we have a rego
+        const rego = cardData?.vehicleOnCard || form.registration;
+        if (rego && cleanCard.length >= 10) learnFleetCardCorrection(cleanCard, rego);
+      }},
+      { label: "Card Rego", val: cardData?.vehicleOnCard || "", set: v => {
+        const cleanRego = v.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        setCardData(d => ({...(d || {}), vehicleOnCard: cleanRego}));
+        // Learn this rego ↔ card association if we have a card number
+        const card = cardData?.cardNumber;
+        if (card && card.length >= 10 && cleanRego) learnFleetCardCorrection(card, cleanRego);
+      }},
     ];
     const hasCardData = !!(cardData?.cardNumber || regoMatch?.c);
 
