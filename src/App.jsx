@@ -377,8 +377,8 @@ async function fileToB64(file) {
 }
 
 // Compress image to stay under API 5MB limit (targets ~3.5MB max)
-const MAX_B64_BYTES = 3_500_000;
-const MAX_DIMENSION = 2048;
+const MAX_B64_BYTES = 8_000_000;
+const MAX_DIMENSION = 3200;
 
 async function compressImage(file, rotation = 0) {
   // Read file as data URL first (works reliably in all environments)
@@ -426,8 +426,8 @@ async function compressImage(file, rotation = 0) {
   }
 
   // Try progressively lower quality until under limit
-  let quality = 0.8;
-  const MIN_QUALITY = 0.3;
+  let quality = 0.92;
+  const MIN_QUALITY = 0.5;
   let dataUrl;
   for (let attempt = 0; attempt < 5; attempt++) {
     dataUrl = canvas.toDataURL("image/jpeg", quality);
@@ -1034,7 +1034,7 @@ async function claudeScan(apiKey, b64, mime, prompt) {
       "anthropic-dangerous-direct-browser-access": "true",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-opus-4-20250514",
       max_tokens: 1000,
       messages: [{
         role: "user",
