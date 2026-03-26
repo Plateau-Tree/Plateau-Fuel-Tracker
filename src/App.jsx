@@ -3080,7 +3080,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
                     <>
                       <div>
                         <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Registration</label>
-                        <input value={sp.rego} onChange={e => updateSplit(sp.id, "rego", e.target.value.toUpperCase())} placeholder="e.g. 59040D"
+                        <input value={sp.rego} onChange={e => updateSplit(sp.id, "rego", e.target.value.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6))} placeholder="e.g. AB12CD" maxLength={6}
                           style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white", textTransform: "uppercase" }}
                           onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
                       </div>
@@ -3204,8 +3204,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
         {splitMode && <div style={{ fontSize: 12, fontWeight: 700, color: "#15803d", marginBottom: 8, marginTop: 4 }}>Vehicle 1</div>}
 
         <FieldInput label="Registration Number" value={form.registration} required
+          maxLength={6}
           onChange={v => {
-            v = v.toUpperCase();
+            // Only allow letters and numbers, max 6 characters
+            v = v.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6);
             const prevLen = form.registration.length;
             const isTypingMore = v.length > prevLen;
             const db = learnedDBRef.current;
@@ -3213,7 +3215,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
             if (match) {
               // Only auto-fill the full rego when user is typing forward (adding chars),
               // not when deleting or editing — so the user can still make corrections
-              const fullRego = (isTypingMore && match.r && match.r.length > v.length) ? match.r : v;
+              const fullRego = (isTypingMore && match.r && match.r.length > v.length) ? match.r.slice(0, 6) : v;
               setForm(f => ({ ...f, registration: fullRego, vehicleType: match.t, division: match.d, _regoMatch: match }));
             } else {
               const vt = guessType(v, db, entriesRef.current);
@@ -3225,7 +3227,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
               }
             }
           }}
-          placeholder="e.g. Cat 29404e" hint="This takes priority over what's shown on the fleet card" />
+          placeholder="e.g. AB12CD" hint="6 characters — letters and numbers only" />
 
         {/* Rego match card */}
         {form._regoMatch && (
@@ -3409,7 +3411,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
                 <>
                   <div style={{ marginBottom: 8 }}>
                     <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Registration</label>
-                    <input value={sp.rego} onChange={e => updateSplit(sp.id, "rego", e.target.value.toUpperCase())} placeholder="e.g. 59040D"
+                    <input value={sp.rego} onChange={e => updateSplit(sp.id, "rego", e.target.value.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6))} placeholder="e.g. AB12CD" maxLength={6}
                       style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
                       onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
                   </div>
@@ -3905,7 +3907,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     const vehicleRows = [
       { label: "First Name", val: form.driverFirstName, set: v => setForm(f => ({...f, driverFirstName: v})) },
       { label: "Last Name", val: form.driverLastName, set: v => setForm(f => ({...f, driverLastName: v})) },
-      { label: "Registration", val: form.registration, set: v => setForm(f => ({...f, registration: v.toUpperCase()})) },
+      { label: "Registration", val: form.registration, set: v => setForm(f => ({...f, registration: v.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6)})) },
       { label: "Division", val: form.division, set: v => setForm(f => ({...f, division: v})) },
       { label: "Vehicle type", val: form.vehicleType, set: v => setForm(f => ({...f, vehicleType: v})) },
       { label: "Odometer", val: form.odometer, set: v => setForm(f => ({...f, odometer: v})) },
@@ -4024,7 +4026,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           } else {
             const spMatch = sp._match || lookupRego(sp.rego, learnedDBRef.current, entriesRef.current);
             spRows = [
-              { label: "Registration", val: sp.rego, set: v => updateSplit(sp.id, "rego", v.toUpperCase()) },
+              { label: "Registration", val: sp.rego, set: v => updateSplit(sp.id, "rego", v.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6)) },
               { label: "Vehicle", val: spMatch?.n || spMatch?.t || "\u2014", set: null },
               { label: "Fuel type", val: ml?.fuelType || "", set: null },
               { label: "Odometer", val: sp.odometer, set: v => updateSplit(sp.id, "odometer", v) },
