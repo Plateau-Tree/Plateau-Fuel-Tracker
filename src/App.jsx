@@ -3052,11 +3052,19 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           if (!sp.rego) continue;
           const matchedLine = findBestLine(sp);
           const match = lookupRego(sp.rego, learnedDBRef.current, entriesRef.current) || sp._match;
+          // If no litres entered, calculate remainder: total - all other entered litres
+          let spLitresVal = parseFloat(sp.litres) || 0;
+          if (!spLitresVal && parsedLitresTotal > 0) {
+            const v1Used = parseFloat(form.litres) || 0;
+            const otherSplitsUsed = splits.filter(s => s.splitType === "vehicle" && s.id !== sp.id).reduce((s, o) => s + (parseFloat(o.litres) || 0), 0);
+            const remainder = parseFloat((parsedLitresTotal - v1Used - otherSplitsUsed).toFixed(2));
+            if (remainder > 0) spLitresVal = remainder;
+          }
           const splitEntry = buildEntry(
             sp.rego.trim().toUpperCase(),
             sp.division || match?.d || "",
             sp.vehicleType || match?.t || "",
-            sp.odometer, sp.litres || matchedLine?.litres || 0, match, matchedLine
+            sp.odometer, spLitresVal || matchedLine?.litres || 0, match, matchedLine
           );
           if (sp._costOverride) splitEntry.totalCost = parseFloat(sp._costOverride) || splitEntry.totalCost;
           allNew = insertChronological(allNew, splitEntry);
@@ -3638,10 +3646,18 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
               );
             })()}
           </div>
-          {splitMode && (
-            <FieldInput label="Litres for this vehicle" value={form.litres || ""} type="number"
-              onChange={v => setForm(f => ({ ...f, litres: v }))} placeholder="e.g. 44.35" hint="How many litres went into this vehicle" />
-          )}
+          {splitMode && (() => {
+            const totalScanned = receiptData?.litres || 0;
+            const otherVehicleLitres = splits.filter(s => s.splitType === "vehicle").reduce((s, sp) => s + (parseFloat(sp.litres) || 0), 0);
+            const remaining = totalScanned > 0 ? Math.max(0, parseFloat((totalScanned - otherVehicleLitres).toFixed(2))) : 0;
+            const hint = remaining > 0 && !form.litres
+              ? `${remaining}L remaining from ${totalScanned}L total`
+              : "How many litres went into this vehicle";
+            return (
+              <FieldInput label="Litres for this vehicle" value={form.litres || ""} type="number"
+                onChange={v => setForm(f => ({ ...f, litres: v }))} placeholder={remaining > 0 ? `${remaining}` : "e.g. 44.35"} hint={hint} />
+            );
+          })()}
         </div>
 
         {/* ── Additional items (vehicles or other) ── */}
@@ -3722,9 +3738,18 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
                     </div>
                     <div>
                       <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Litres</label>
-                      <input value={sp.litres} onChange={e => updateSplit(sp.id, "litres", e.target.value)} placeholder="e.g. 15.14" type="number" inputMode="decimal"
-                        style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
-                        onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                      {(() => {
+                        const totalScanned = receiptData?.litres || 0;
+                        const v1Litres = parseFloat(form.litres) || 0;
+                        const otherSplitLitres = splits.filter(s => s.splitType === "vehicle" && s.id !== sp.id).reduce((s, o) => s + (parseFloat(o.litres) || 0), 0);
+                        const usedLitres = v1Litres + otherSplitLitres;
+                        const remaining = totalScanned > 0 ? Math.max(0, parseFloat((totalScanned - usedLitres).toFixed(2))) : 0;
+                        return (
+                          <input value={sp.litres} onChange={e => updateSplit(sp.id, "litres", e.target.value)} placeholder={remaining > 0 ? `${remaining}` : "e.g. 15.14"} type="number" inputMode="decimal"
+                            style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
+                            onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                        );
+                      })()}
                     </div>
                     <div>
                       <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>$/L <span style={{ fontWeight: 400, color: "#94a3b8" }}>(opt)</span></label>
