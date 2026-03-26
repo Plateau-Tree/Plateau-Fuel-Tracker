@@ -3026,10 +3026,10 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           let entryLitres = parseFloat(sp.litres) || null;
 
           if (matchedOther && !isFuelOther) {
-            nextOtherIdx++;
             equipDesc = `${sp.equipment.trim()} \u2014 ${matchedOther.description}`;
             cost = matchedOther.cost || null;
-            entryPpl = null;
+            entryLitres = matchedOther.litres || entryLitres;
+            entryPpl = matchedOther.pricePerLitre || (matchedOther.litres > 0 && matchedOther.cost > 0 ? parseFloat((matchedOther.cost / matchedOther.litres).toFixed(4)) : null);
             notes = notes || `${matchedOther.description}${matchedOther.quantity ? " (" + matchedOther.quantity + ")" : ""} \u2014 $${matchedOther.cost?.toFixed(2) || "?"}`;
           } else if (matchedFuelLine) {
             entryLitres = matchedFuelLine.litres || entryLitres;
@@ -4470,9 +4470,12 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
           let spRows;
           if (isOther && mi) {
+            const miPpl = mi.pricePerLitre || (mi.litres > 0 && mi.cost > 0 ? parseFloat((mi.cost / mi.litres).toFixed(4)) : null);
             spRows = [
               { label: "Equipment", val: sp.equipment, set: v => updateSplit(sp.id, "equipment", v) },
               { label: "Matched to", val: mi.description + (mi.quantity ? ` (${mi.quantity})` : ""), set: null },
+              { label: "Litres", val: mi.litres?.toString() || sp.litres || "", set: v => updateSplit(sp.id, "litres", v) },
+              ...(miPpl ? [{ label: "$/L", val: miPpl.toString(), set: null }] : []),
               { label: "Cost", val: sp._costOverride || mi.cost?.toFixed(2) || "", set: v => updateSplit(sp.id, "_costOverride", v) },
             ];
           } else if (isOther && ml) {
@@ -4486,11 +4489,16 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             ];
           } else if (isOther) {
             const spLitres = parseFloat(sp.litres) || 0;
+            // Try to find a matching otherItem by equipment name for price lookup
+            const otherMatch = scannedOtherItems.find(oi => oi.description && sp.equipment && oi.description.toLowerCase().includes(sp.equipment.toLowerCase()));
+            const otherPpl = otherMatch?.pricePerLitre || (otherMatch?.litres > 0 && otherMatch?.cost > 0 ? parseFloat((otherMatch.cost / otherMatch.litres).toFixed(4)) : null);
+            const otherCost = otherMatch?.cost || (spLitres && otherPpl ? spLitres * otherPpl : (spLitres && globalPpl ? spLitres * globalPpl : null));
             spRows = [
               { label: "Equipment", val: sp.equipment, set: v => updateSplit(sp.id, "equipment", v) },
               { label: "Litres", val: sp.litres, set: v => updateSplit(sp.id, "litres", v) },
+              ...(otherPpl ? [{ label: "$/L", val: otherPpl.toString(), set: null }] : []),
+              { label: "Cost", val: sp._costOverride || (otherCost ? otherCost.toFixed(2) : ""), set: v => updateSplit(sp.id, "_costOverride", v) },
               { label: "Notes", val: sp.notes || "", set: v => updateSplit(sp.id, "notes", v) },
-              { label: "Cost", val: sp._costOverride || (spLitres && globalPpl ? (spLitres * globalPpl).toFixed(2) : ""), set: v => updateSplit(sp.id, "_costOverride", v) },
             ];
           } else {
             const spMatch = sp._match || lookupRego(sp.rego, learnedDBRef.current, entriesRef.current);
