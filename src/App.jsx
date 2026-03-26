@@ -2873,11 +2873,30 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     const buildEntry = (rego, division, vehicleType, odometer, litres, regoMatch, matchedLine) => {
       const lineFuelType = matchedLine?.fuelType || baseFuelType || regoMatch?.f || "";
       const parsedLitres = parseFloat(litres) || null;
-      const lineCost = matchedLine?.cost || null;
-      // Recalculate price from cost ÷ litres (most reliable) — fallback to scanned price
-      const linePpl = (lineCost && parsedLitres && parsedLitres > 0)
-        ? parseFloat((lineCost / parsedLitres).toFixed(4))
-        : (matchedLine?.pricePerLitre || ppl);
+      const scannedLineCost = matchedLine?.cost || null;
+      const scannedLineLitres = matchedLine?.litres || null;
+
+      // Price per litre: use scanned line's price directly
+      // Only recalculate from cost÷litres if user litres match scanned litres (non-split)
+      let linePpl;
+      if (matchedLine?.pricePerLitre) {
+        linePpl = matchedLine.pricePerLitre;
+      } else if (scannedLineCost && scannedLineLitres && scannedLineLitres > 0) {
+        linePpl = parseFloat((scannedLineCost / scannedLineLitres).toFixed(4));
+      } else {
+        linePpl = ppl;
+      }
+
+      // Cost: if user entered different litres than scanned (split), recalculate from litres × ppl
+      // If litres match scanned, use scanned cost directly
+      let entryCost;
+      if (parsedLitres && scannedLineLitres && Math.abs(parsedLitres - scannedLineLitres) < 0.5) {
+        // User litres ≈ scanned litres — use scanned cost (most accurate)
+        entryCost = scannedLineCost;
+      } else {
+        // User entered different litres (split receipt) — calculate from price
+        entryCost = (parsedLitres || 0) * (linePpl || 0) || null;
+      }
       return {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         submittedAt: now,
@@ -2889,7 +2908,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         date,
         litres: parsedLitres,
         pricePerLitre: linePpl,
-        totalCost: lineCost || ((parsedLitres || 0) * (linePpl || 0)) || null,
+        totalCost: entryCost,
         station,
         fuelType: lineFuelType,
         fleetCardNumber: cardNum || regoMatch?.c || "",
@@ -4275,22 +4294,31 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     const primaryLitres = splitMode
       ? (form.litres || primaryLine?.litres?.toString() || "0")
       : (receiptData?._rawLitres || receiptData?.litres?.toString() || "");
+
+    // Price per litre logic:
+    // - In split mode: trust the scanned line's price (user is splitting litres, not changing price)
+    // - In non-split mode: recalculate from cost ÷ litres as a cross-check
+    const userLitres = parseFloat(primaryLitres);
+    let primaryPpl;
+    if (splitMode) {
+      // Split mode: price per litre stays the same regardless of how litres are divided
+      primaryPpl = primaryLine?.pricePerLitre || receiptData?.pricePerLitre || globalPpl;
+    } else {
+      const lineCost = parseFloat(receiptData?._rawCost || receiptData?.fuelCost || receiptData?.totalCost || 0);
+      if (userLitres > 0 && lineCost > 0) {
+        primaryPpl = parseFloat((lineCost / userLitres).toFixed(4));
+      } else {
+        primaryPpl = primaryLine?.pricePerLitre || globalPpl;
+      }
+    }
+
+    // Cost logic:
+    // - In split mode: cost = user's litres × price per litre (not the full receipt cost)
+    // - In non-split mode: use the scanned cost directly
     const primaryCost = receiptData?._rawCost
       || (splitMode
-        ? (primaryLine?.cost?.toFixed(2) || "")
+        ? (userLitres > 0 && primaryPpl > 0 ? (userLitres * primaryPpl).toFixed(2) : (primaryLine?.cost?.toFixed(2) || ""))
         : (receiptData?.fuelCost?.toString() || receiptData?.totalCost?.toString() || ""));
-
-    // Recalculate price per litre from cost ÷ litres when user has entered their own litres
-    // This catches cases where AI reads wrong litres AND wrong price but correct cost
-    const userLitres = parseFloat(primaryLitres);
-    const lineCost = parseFloat(primaryCost);
-    let primaryPpl;
-    if (userLitres > 0 && lineCost > 0) {
-      // Always trust cost ÷ litres — this is the most reliable calculation
-      primaryPpl = parseFloat((lineCost / userLitres).toFixed(4));
-    } else {
-      primaryPpl = primaryLine?.pricePerLitre || globalPpl;
-    }
 
     const vehicleRows = [
       { label: "First Name", val: form.driverFirstName, set: v => setForm(f => ({...f, driverFirstName: v})) },
@@ -4466,14 +4494,27 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             ];
           } else {
             const spMatch = sp._match || lookupRego(sp.rego, learnedDBRef.current, entriesRef.current);
+            const spPpl = ml?.pricePerLitre || globalPpl || 0;
+            // Use user-entered litres, or calculate remaining litres from total
+            const spUserLitres = parseFloat(sp.litres) || 0;
+            let spDisplayLitres = sp.litres;
+            if (!spUserLitres && receiptData?.litres > 0) {
+              const v1Used = parseFloat(form.litres) || 0;
+              const otherUsed = splits.filter(s => s.splitType === "vehicle" && s.id !== sp.id).reduce((s, o) => s + (parseFloat(o.litres) || 0), 0);
+              const rem = parseFloat((receiptData.litres - v1Used - otherUsed).toFixed(2));
+              if (rem > 0) spDisplayLitres = rem.toString();
+            }
+            const spFinalLitres = parseFloat(spDisplayLitres) || 0;
+            // Cost = litres × price per litre (not the full receipt line cost)
+            const spCalcCost = spFinalLitres > 0 && spPpl > 0 ? (spFinalLitres * spPpl).toFixed(2) : "";
             spRows = [
               { label: "Registration", val: sp.rego, set: v => updateSplit(sp.id, "rego", v.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6)) },
               { label: "Vehicle", val: spMatch?.n || spMatch?.t || "\u2014", set: null },
               { label: "Fuel type", val: ml?.fuelType || "", set: null },
               { label: "Odometer", val: sp.odometer, set: v => updateSplit(sp.id, "odometer", v) },
-              { label: "Litres", val: ml?.litres?.toString() || sp.litres, set: v => updateSplit(sp.id, "litres", v) },
-              { label: "$/L", val: ml?.pricePerLitre?.toString() || globalPpl?.toString() || "", set: null },
-              { label: "Cost", val: sp._costOverride || ml?.cost?.toFixed(2) || "", set: v => updateSplit(sp.id, "_costOverride", v) },
+              { label: "Litres", val: spDisplayLitres, set: v => updateSplit(sp.id, "litres", v) },
+              { label: "$/L", val: spPpl?.toString() || "", set: null },
+              { label: "Cost", val: sp._costOverride || spCalcCost, set: v => updateSplit(sp.id, "_costOverride", v) },
             ];
           }
           return (
