@@ -576,36 +576,92 @@ function normalizeReceiptData(data) {
     return line;
   });
 
-  // Cross-check each line: litres × price should ≈ cost (use per-line price when available)
+  // ── Fuel math cross-check: litres × pricePerLitre = cost ──
+  // For each line, if 2 of 3 values exist, calculate the missing one.
+  // If all 3 exist, verify they're consistent (within 2% tolerance for rounding).
+  // If inconsistent, trust the two values that produce a reasonable Australian fuel price ($1-$4/L).
   const ppl = data.pricePerLitre;
-  data.lines = data.lines.map(line => {
-    if (line.litres && line.cost && line.cost > 0) {
-      const linePpl = line.pricePerLitre || ppl || (line.cost / line.litres);
-      const expected = line.litres * linePpl;
-      if (expected > line.cost * 3) {
-        const correctedLitres = parseFloat((line.cost / linePpl).toFixed(2));
-        if (correctedLitres > 0 && correctedLitres < line.litres) {
-          line._originalLitres = line.litres;
-          line.litres = correctedLitres;
+  data._mathIssues = [];
+
+  data.lines = data.lines.map((line, idx) => {
+    const litres = line.litres;
+    const cost = line.cost;
+    const price = line.pricePerLitre || ppl;
+
+    // Calculate missing value from the other two
+    if (litres && cost && !line.pricePerLitre && !ppl) {
+      // Have litres and cost, missing price → calculate it
+      line.pricePerLitre = parseFloat((cost / litres).toFixed(4));
+    } else if (litres && price && !cost) {
+      // Have litres and price, missing cost → calculate it
+      line.cost = parseFloat((litres * price).toFixed(2));
+    } else if (cost && price && !litres) {
+      // Have cost and price, missing litres → calculate it
+      line.litres = parseFloat((cost / price).toFixed(2));
+    }
+
+    // If all 3 exist, verify consistency
+    if (line.litres && line.cost && line.cost > 0 && (line.pricePerLitre || ppl)) {
+      const lp = line.pricePerLitre || ppl;
+      const expected = line.litres * lp;
+      const diff = Math.abs(expected - line.cost);
+      const tolerance = line.cost * 0.02; // 2% tolerance for rounding
+
+      if (diff > tolerance && diff > 0.10) {
+        // Math doesn't add up — figure out which value is wrong
+        // Calculate what each value SHOULD be from the other two
+        const calcLitres = parseFloat((line.cost / lp).toFixed(2));
+        const calcPrice = parseFloat((line.cost / line.litres).toFixed(4));
+        const calcCost = parseFloat((line.litres * lp).toFixed(2));
+
+        // Trust the combination that produces a reasonable fuel price ($1-$4/L)
+        const priceFromCostLitres = line.cost / line.litres;
+        const priceReasonable = priceFromCostLitres >= 1.0 && priceFromCostLitres <= 4.5;
+
+        if (priceReasonable && Math.abs(calcPrice - lp) > 0.01) {
+          // Cost and litres agree on a reasonable price → price was wrong
+          line._originalPpl = line.pricePerLitre;
+          line.pricePerLitre = calcPrice;
           line._corrected = true;
+          data._mathIssues.push(`Line ${idx+1}: price adjusted from $${lp}/L to $${calcPrice}/L (cost÷litres)`);
+        } else if (lp >= 1.0 && lp <= 4.5) {
+          // Price looks reasonable → litres was likely wrong
+          line._originalLitres = line.litres;
+          line.litres = calcLitres;
+          line._corrected = true;
+          data._mathIssues.push(`Line ${idx+1}: litres adjusted from ${litres} to ${calcLitres} (cost÷price)`);
+        } else {
+          // Flag it for human review
+          data._mathIssues.push(`Line ${idx+1}: ${line.litres}L × $${lp}/L = $${expected.toFixed(2)} but receipt shows $${line.cost} — needs review`);
         }
       }
     }
     return line;
   });
 
-  // Recalculate litres from clean fuel lines
+  // Recalculate totals from corrected lines
   const lineSum = data.lines.reduce((s, l) => s + (l.litres || 0), 0);
   if (!data.litres || data.lines.some(l => l._corrected)) {
     data.litres = parseFloat(lineSum.toFixed(2));
   }
-  // Cross-check total litres against totalCost
-  if (data.litres && ppl && data.totalCost) {
-    const expectedTotal = data.litres * ppl;
-    if (expectedTotal > data.totalCost * 3) {
-      data.litres = parseFloat((data.totalCost / ppl).toFixed(2));
+
+  // Calculate price per litre from totals if still missing
+  if (!data.pricePerLitre && data.litres && data.totalCost) {
+    data.pricePerLitre = parseFloat((data.totalCost / data.litres).toFixed(4));
+  }
+
+  // Verify total cost against sum of line costs (allow small difference for surcharges/discounts)
+  if (data.totalCost && data.lines.length > 0) {
+    const lineCostSum = data.lines.reduce((s, l) => s + (l.cost || 0), 0);
+    if (lineCostSum > 0) {
+      const totalDiff = Math.abs(data.totalCost - lineCostSum);
+      // If line costs exist but total is way off (>10% and >$5), flag it
+      if (totalDiff > lineCostSum * 0.10 && totalDiff > 5) {
+        data._mathIssues.push(`Total cost $${data.totalCost} differs from fuel line total $${lineCostSum.toFixed(2)} by $${totalDiff.toFixed(2)} — may include surcharges or discounts`);
+      }
     }
   }
+
   // If totalCost is missing, sum from lines
   if (!data.totalCost && data.lines.length > 0) {
     const lineTotal = data.lines.reduce((s, l) => s + (l.cost || 0), 0);
@@ -2538,7 +2594,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         notes: otherForm.notes.trim(),
         hasReceipt: !!receiptB64,
         _aiConfidence: receiptData?.confidence?.overall || null,
-        _aiIssues: receiptData?.confidence?.issues || [],
+        _aiIssues: [...(receiptData?.confidence?.issues || []), ...(receiptData?._mathIssues || [])],
       };
       await persist([...entries, otherEntry], otherEntry);
       if (receiptB64) await saveReceiptImage(otherEntry.id, receiptB64, receiptMime);
@@ -2579,7 +2635,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         splitReceipt: splitMode || false,
         hasReceipt: !!receiptB64,
         _aiConfidence: receiptData?.confidence?.overall || null,
-        _aiIssues: receiptData?.confidence?.issues || [],
+        _aiIssues: [...(receiptData?.confidence?.issues || []), ...(receiptData?._mathIssues || [])],
       };
     };
 
