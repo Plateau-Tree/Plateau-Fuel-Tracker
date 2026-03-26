@@ -477,8 +477,23 @@ Fuel receipts show MULTIPLE numbers that look like litres. You MUST distinguish 
 
 HOW TO VERIFY: For each fuel line, multiply litres × price-per-litre. The result should approximately equal the line cost. Example: 8.09 × 2.465 ≈ $19.94 ✓. If your litres × price gives a wildly wrong number, you picked the WRONG number.
 
+CRITICAL — READING RECEIPT LINE FORMAT:
+Australian fuel receipts typically use a TWO-LINE format per product:
+  Line A: "1 PRODUCT NAME          $COST  B"   ← the COST on the RIGHT belongs to THIS product
+  Line B: "Pump: XX  LITRES Litre  PRICE$/L"   ← the litres and price/L for THIS product
+
+Example from a real receipt:
+  "1 ADBLUE              26.05 B"      ← AdBlue costs $26.05
+  "Pump: 21  13.03 Litre  1.999$/L"    ← AdBlue is 13.03L at $1.999/L
+  "1 ULT. DIESEL        383.01 B"      ← Diesel costs $383.01 (NOT related to AdBlue!)
+  "Pump: 22  128.57 Litre  2.979$/L"   ← Diesel is 128.57L at $2.979/L
+
+CRITICAL: Each product has its OWN cost, litres, and price-per-litre. Do NOT merge them. Do NOT assign diesel's price to AdBlue or vice versa. The cost on the RIGHT side of each line belongs to the product named on the LEFT side of THAT SAME LINE.
+
+Products can appear in ANY order — AdBlue may come BEFORE diesel on the receipt. Read each product independently.
+
 NON-FUEL PURCHASES:
-Look for any non-fuel items on the receipt such as motor oil (e.g. "Mobil Special 20W-50"), AdBlue, coolant, car wash, food, etc. List these separately in "otherItems".
+Look for any non-fuel items on the receipt such as motor oil (e.g. "Mobil Special 20W-50"), AdBlue, coolant, car wash, food, etc. List these separately in "otherItems". For AdBlue in otherItems, include the litres, cost, and pricePerLitre as separate fields.
 
 FLEET CARD DATA — PHYSICAL CARD ONLY:
 Look for a PHYSICAL orange/red Shell FleetCard that is VISIBLE AS A SEPARATE CARD in the photo (not just text on the receipt). The card must show the full 16-digit number starting with 7034 printed on the card itself.
@@ -508,7 +523,7 @@ Return ONLY valid JSON with no other text:
     {"litres": number, "cost": number_or_null, "pump": "pump number or null", "fuelType": "EXACT fuel type as printed on receipt", "pricePerLitre": number_or_null}
   ],
   "otherItems": [
-    {"description": "EXACT item name as printed on receipt", "cost": number_or_null, "quantity": "string or null"}
+    {"description": "EXACT item name as printed on receipt", "cost": number_or_null, "quantity": "string or null", "litres": number_or_null, "pricePerLitre": number_in_dollars_or_null}
   ],
   "discounts": number_total_discounts_or_null,
   "cardNumber": "full 16 digit fleet card number FROM PHYSICAL CARD or null",
@@ -523,7 +538,8 @@ Return ONLY valid JSON with no other text:
 
 RULES:
 - "lines" array must ONLY contain actual FUEL dispensed (petrol, diesel, premium, unleaded, etc.). If 2 fuel types were pumped, return 2 lines. Never include discounts as a line.
-- CRITICAL: AdBlue is NOT fuel — it is a diesel exhaust fluid. AdBlue MUST go in "otherItems", NEVER in "lines". Same for DEF (Diesel Exhaust Fluid). If a receipt has AdBlue and Diesel, the Diesel goes in "lines" and the AdBlue goes in "otherItems".
+- CRITICAL: AdBlue is NOT fuel — it is a diesel exhaust fluid. AdBlue MUST go in "otherItems", NEVER in "lines". Same for DEF (Diesel Exhaust Fluid). If a receipt has AdBlue and Diesel, the Diesel goes in "lines" and the AdBlue goes in "otherItems" with its OWN cost, litres, and pricePerLitre. AdBlue typically costs $1.50-$2.50/L. Diesel typically costs $1.50-$3.50/L. They are DIFFERENT products with DIFFERENT prices — never average or merge them.
+- CROSS-CHECK EVERY PRODUCT: For each product (fuel or other), verify: litres × pricePerLitre ≈ cost. Example: AdBlue 13.03L × $1.999/L = $26.05 ✓. Diesel 128.57L × $2.979/L = $383.01 ✓. If your numbers don't multiply correctly, re-read the receipt — you have assigned the wrong price or litres to a product.
 - CRITICAL: pricePerLitre must ALWAYS be in DOLLARS, not cents. Australian receipts often show price in cents per litre (e.g. "274.9 c/L" or "274.90c/L" or "@ 274.9"). If the price looks like it's in cents (typically 100-400 range for fuel), DIVIDE BY 100 to convert to dollars. Example: "274.9 c/L" = 2.749 dollars per litre. "189.9c/L" = 1.899 dollars per litre. Australian fuel typically costs between $1.00 and $4.00 per litre — any value outside this range is almost certainly in cents.
 - CRITICAL: Each line MUST have its OWN fuelType and pricePerLitre extracted from the receipt. Do NOT copy the same fuel type to all lines. Example: if line 1 says "PREMIUM DIESEL @ $2.049/L" and line 2 says "PREMIUM 95 @ $1.919/L", then line 1 fuelType is "Premium Diesel" and line 2 fuelType is "Premium 95" — they are DIFFERENT fuels with DIFFERENT prices.
 - "otherItems" lists non-fuel products (oil, AdBlue, etc.) with the EXACT description as printed. Empty array [] if none. Do NOT include fleet card surcharges, card fees, or transaction fees — these are standard station charges and should be ignored entirely.
