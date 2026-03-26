@@ -587,6 +587,33 @@ function normalizeReceiptData(data) {
     data.lines = [{ litres: data.litres, cost: data.totalCost || null, pump: null, fuelType: data.fuelType || null }];
   }
 
+  // Detect phantom/duplicate lines: if total line litres far exceeds reported total, lines are wrong
+  if (data.litres && data.lines.length > 1) {
+    const lineLitresSum = data.lines.reduce((s, l) => s + (l.litres || 0), 0);
+    if (lineLitresSum > data.litres * 1.5 && lineLitresSum > data.litres + 20) {
+      // AI hallucinated extra lines — keep only lines whose litres appear reasonable
+      // Sort by litres descending and try to find subset that sums close to reported total
+      const sortedLines = [...data.lines].sort((a, b) => (b.litres || 0) - (a.litres || 0));
+      let bestSubset = [sortedLines[0]]; // at minimum keep the largest
+      let bestDiff = Math.abs((sortedLines[0]?.litres || 0) - data.litres);
+
+      // Try all combinations of 2 lines
+      for (let i = 0; i < sortedLines.length; i++) {
+        for (let j = i + 1; j < sortedLines.length; j++) {
+          const sum = (sortedLines[i].litres || 0) + (sortedLines[j].litres || 0);
+          const diff = Math.abs(sum - data.litres);
+          if (diff < bestDiff) { bestDiff = diff; bestSubset = [sortedLines[i], sortedLines[j]]; }
+        }
+      }
+
+      if (bestSubset.length < data.lines.length) {
+        data._mathIssues = data._mathIssues || [];
+        data._mathIssues.push(`Removed ${data.lines.length - bestSubset.length} phantom fuel line(s) — AI detected ${data.lines.length} but receipt shows ~${data.litres}L total`);
+        data.lines = bestSubset;
+      }
+    }
+  }
+
   // Fix price per litre if reported in cents instead of dollars (e.g. 274.9 instead of 2.749)
   if (data.pricePerLitre && data.pricePerLitre > 10) {
     data.pricePerLitre = Math.round((data.pricePerLitre / 100) * 10000) / 10000;
@@ -701,14 +728,45 @@ function normalizeReceiptData(data) {
     }
   }
 
-  // Verify total cost against sum of line costs (allow small difference for surcharges/discounts)
+  // ── CRITICAL: Verify sum of line costs matches receipt total ──
+  // If the AI hallucinated lines or costs, the sum won't match. Rebuild if needed.
   if (data.totalCost && data.lines.length > 0) {
     const lineCostSum = data.lines.reduce((s, l) => s + (l.cost || 0), 0);
+    const otherCostSum = data.otherItems.reduce((s, item) => s + (item.cost || 0), 0);
+    const expectedProductTotal = lineCostSum + otherCostSum;
+
     if (lineCostSum > 0) {
-      const totalDiff = Math.abs(data.totalCost - lineCostSum);
-      // If line costs exist but total is way off (>10% and >$5), flag it
-      if (totalDiff > lineCostSum * 0.10 && totalDiff > 5) {
-        data._mathIssues.push(`Total cost $${data.totalCost} differs from fuel line total $${lineCostSum.toFixed(2)} by $${totalDiff.toFixed(2)} — may include surcharges or discounts`);
+      const totalDiff = Math.abs(data.totalCost - expectedProductTotal);
+
+      // If line costs are way off from receipt total (>15% and >$10), lines are likely wrong
+      if (totalDiff > data.totalCost * 0.15 && totalDiff > 10) {
+        data._mathIssues.push(`AI line costs ($${lineCostSum.toFixed(2)}) don't match receipt total ($${data.totalCost}) — recalculating`);
+
+        // Recalculate: fuel cost = total - otherItems cost (allow ~$10 for surcharges)
+        const fuelCost = data.totalCost - otherCostSum;
+
+        if (data.lines.length === 1) {
+          // Single fuel line — assign full fuel cost to it
+          data.lines[0].cost = parseFloat(fuelCost.toFixed(2));
+          if (data.lines[0].litres) {
+            data.lines[0].pricePerLitre = parseFloat((fuelCost / data.lines[0].litres).toFixed(4));
+          }
+          data.lines[0]._corrected = true;
+        } else {
+          // Multiple fuel lines — try to redistribute based on litres ratio
+          const totalLitres = data.lines.reduce((s, l) => s + (l.litres || 0), 0);
+          if (totalLitres > 0) {
+            data.lines = data.lines.map(l => {
+              if (l.litres && l.litres > 0) {
+                const proportion = l.litres / totalLitres;
+                l.cost = parseFloat((fuelCost * proportion).toFixed(2));
+                l.pricePerLitre = parseFloat((l.cost / l.litres).toFixed(4));
+                l._corrected = true;
+              }
+              return l;
+            });
+          }
+        }
       }
     }
   }
