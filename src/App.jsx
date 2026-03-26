@@ -729,149 +729,168 @@ function editDistance(a, b) {
   return dp[m][n];
 }
 
+// All Plateau Trees fleet cards share this prefix — NEVER changes
+const FLEET_CARD_PREFIX = "70343051";
+
+// Vehicle types ranked by typical fuel consumption (highest first)
+// Used to match fuel lines to vehicles: highest litres → largest consumer
+const VEHICLE_FUEL_RANK = {
+  "Truck": 1, "Excavator": 2, "EWP": 3, "Chipper": 4,
+  "Ute": 5, "Stump Grinder": 6, "Landscape Tractor": 7, "Hired Vehicle": 8,
+  "Trailer": 9, "Mower": 10, "Other": 11,
+};
+
+// Sort vehicles so largest consumers come first, then match sorted fuel lines (highest litres first)
+function smartMatchLinesToVehicles(vehicles, fuelLines) {
+  // vehicles: [{ id, type, litres?, ... }]  fuelLines: [{ litres, cost, ... }]
+  if (!fuelLines || fuelLines.length === 0 || vehicles.length === 0) return [];
+
+  // Sort fuel lines by litres descending (highest first)
+  const sortedLines = [...fuelLines].sort((a, b) => (b.litres || 0) - (a.litres || 0));
+
+  // Sort vehicles by fuel consumption rank (largest consumer first)
+  const rankedVehicles = vehicles.map((v, origIdx) => ({
+    ...v, origIdx, rank: VEHICLE_FUEL_RANK[v.type] || 99,
+  })).sort((a, b) => a.rank - b.rank);
+
+  // Match: biggest fuel line → biggest consumer vehicle
+  const matches = new Array(vehicles.length).fill(null);
+  rankedVehicles.forEach((v, i) => {
+    if (i < sortedLines.length) {
+      matches[v.origIdx] = sortedLines[i];
+    }
+  });
+  return matches;
+}
+
 function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
   if (!scannedCard && !scannedRego) return { cardNumber: null, vehicleOnCard: null };
 
   // Build a list of all known fleet cards and regos from REGO_DB + learnedDB
-  const knownCards = []; // { card, rego, source }
+  const knownCards = []; // { card, rego, unique8, source }
   REGO_DB.forEach(v => {
     if (v.c && v.c.length >= 6) {
       const cleanCard = v.c.replace(/[\s]/g, "");
-      // Skip masked/incomplete card numbers (contain * or less than 16 digits)
       if (cleanCard.includes("*") || cleanCard.length < 16) return;
-      knownCards.push({ card: cleanCard, rego: v.r.toUpperCase().replace(/\s+/g, ""), source: v });
+      knownCards.push({ card: cleanCard, rego: v.r.toUpperCase().replace(/\s+/g, ""), unique8: cleanCard.slice(-8), source: v });
     }
   });
   if (learnedDB) {
     Object.entries(learnedDB).forEach(([rego, data]) => {
       if (data.c && data.c.length >= 6) {
         const cleanCard = data.c.replace(/[\s*]/g, "");
-        // Don't duplicate if already in REGO_DB
         if (!knownCards.some(k => k.card === cleanCard && k.rego === rego)) {
-          knownCards.push({ card: cleanCard, rego: rego.toUpperCase().replace(/\s+/g, ""), source: data });
+          knownCards.push({ card: cleanCard, rego: rego.toUpperCase().replace(/\s+/g, ""), unique8: cleanCard.slice(-8), source: data });
         }
       }
+    });
+  }
+
+  // Build rego lookup list
+  const allRegos = REGO_DB.map(v => ({ rego: v.r.toUpperCase().replace(/\s+/g, ""), source: v }));
+  if (learnedDB) {
+    Object.entries(learnedDB).forEach(([rego, data]) => {
+      allRegos.push({ rego: rego.toUpperCase().replace(/\s+/g, ""), source: data });
     });
   }
 
   let bestMatch = null;
   let bestScore = Infinity;
   const cleanScannedCard = scannedCard ? scannedCard.replace(/[\s*]/g, "").toUpperCase() : "";
-  const cleanScannedRego = scannedRego ? scannedRego.toUpperCase().replace(/\s+/g, "") : "";
+  const cleanScannedRego = scannedRego ? scannedRego.toUpperCase().replace(/\s+/g, "").replace(/[^A-Z0-9]/g, "") : "";
 
-  // Helper: count how many digits match in the same position
-  const digitMatchScore = (a, b) => {
-    const len = Math.min(a.length, b.length);
-    let matches = 0;
-    for (let i = 0; i < len; i++) { if (a[i] === b[i]) matches++; }
-    return matches;
-  };
-
-  // Helper: check if first N and last M digits match (prefix/suffix anchoring)
-  const prefixSuffixScore = (scanned, known) => {
-    if (scanned.length < 6 || known.length < 6) return 0;
-    let score = 0;
-    // Check first 4 digits (account prefix — rarely misread)
-    const prefixLen = Math.min(4, scanned.length, known.length);
-    for (let i = 0; i < prefixLen; i++) { if (scanned[i] === known[i]) score += 3; }
-    // Check last 3 digits (often printed on receipt too)
-    const suffixStart = Math.min(scanned.length, known.length);
-    for (let i = 1; i <= 3 && i <= suffixStart; i++) {
-      if (scanned[scanned.length - i] === known[known.length - i]) score += 3;
-    }
-    // Add positional digit matches for the middle section
-    score += digitMatchScore(scanned, known);
-    return score;
-  };
-
-  // PRIORITY: When BOTH card and rego are scanned, find the best match using BOTH signals.
-  // The rego is the most reliable identifier (shorter, easier to read), so it takes priority.
-
-  // Strategy 1: Match by rego FIRST (most reliable — shorter text, easier for AI to read)
-  let regoMatch = null;
-  if (cleanScannedRego && cleanScannedRego.length >= 3) {
-    const allRegos = REGO_DB.map(v => ({ rego: v.r.toUpperCase().replace(/\s+/g, ""), source: v }));
-    if (learnedDB) {
-      Object.entries(learnedDB).forEach(([rego, data]) => {
-        allRegos.push({ rego: rego.toUpperCase().replace(/\s+/g, ""), source: data });
-      });
-    }
-    let bestRegoDist = Infinity;
-    for (const known of allRegos) {
-      const dist = editDistance(cleanScannedRego, known.rego);
-      // Only allow 1-edit matches for regos — 2 edits on a 6-char string is too loose
-      const maxDist = 1;
-      if (dist <= maxDist && dist < bestRegoDist) {
-        bestRegoDist = dist;
-        const cardMatch = knownCards.find(k => k.rego === known.rego);
-        regoMatch = cardMatch || { card: "", rego: known.rego, source: known.source };
-      }
-    }
-    // If rego matched, use it as our best match — rego is the most reliable signal
-    if (regoMatch) {
-      bestMatch = regoMatch;
-      bestScore = bestRegoDist;
+  // Extract the unique part of the scanned card (last 8 digits, or whatever's left after removing prefix)
+  let scannedUnique8 = "";
+  if (cleanScannedCard) {
+    if (cleanScannedCard.startsWith(FLEET_CARD_PREFIX)) {
+      scannedUnique8 = cleanScannedCard.slice(8);
+    } else if (cleanScannedCard.length <= 8) {
+      // AI may have only scanned the unique portion
+      scannedUnique8 = cleanScannedCard;
+    } else {
+      // AI scanned something odd — try to extract last 8 digits
+      scannedUnique8 = cleanScannedCard.slice(-8);
     }
   }
 
-  // Strategy 2: Match by fleet card number (only if rego didn't match, or to confirm rego match)
-  if (cleanScannedCard && cleanScannedCard.length >= 6) {
+  // ── STRATEGY 1: Match by REGO (most reliable — short text, easier for AI to read) ──
+  if (cleanScannedRego && cleanScannedRego.length >= 3) {
+    let bestRegoDist = Infinity;
+    let bestRegoEntry = null;
+    for (const known of allRegos) {
+      const dist = editDistance(cleanScannedRego, known.rego);
+      if (dist <= 1 && dist < bestRegoDist) {
+        bestRegoDist = dist;
+        bestRegoEntry = known;
+      }
+    }
+    if (bestRegoEntry) {
+      // Found rego match — now get the associated fleet card
+      const cardMatch = knownCards.find(k => k.rego === bestRegoEntry.rego);
+      if (cardMatch) {
+        bestMatch = cardMatch;
+        bestScore = bestRegoDist;
+      } else {
+        bestMatch = { card: "", rego: bestRegoEntry.rego, unique8: "", source: bestRegoEntry.source };
+        bestScore = bestRegoDist;
+      }
+    }
+  }
+
+  // ── STRATEGY 2: Match by UNIQUE 8 DIGITS of the card ──
+  // Only if rego didn't find a match, or to confirm/improve the rego match
+  if (scannedUnique8 && scannedUnique8.length >= 4) {
     let bestCardMatch = null;
-    let bestCardScore = Infinity;
+    let bestCardDist = Infinity;
 
     for (const known of knownCards) {
-      const knownClean = known.card.toUpperCase();
-      // Skip cards with very different length
-      if (Math.abs(cleanScannedCard.length - knownClean.length) > 2) continue;
-      // Skip incomplete card numbers (less than 16 digits)
-      if (knownClean.length < 16 && cleanScannedCard.length >= 16) continue;
+      const knownUnique = known.unique8;
 
-      const dist = editDistance(cleanScannedCard, knownClean);
-      // Exact or near-exact match (0-2 edits) — high confidence
-      if (dist <= 2 && dist < bestCardScore) {
-        bestCardScore = dist;
+      // Compare unique 8 digits with edit distance
+      const dist = editDistance(scannedUnique8, knownUnique);
+
+      // Allow up to 2 edits on the 8 unique digits
+      if (dist <= 2 && dist < bestCardDist) {
+        bestCardDist = dist;
         bestCardMatch = known;
-        continue;
       }
 
-      // For 16-digit cards: focus on the unique last 8 digits (first 8 are shared account prefix)
-      if (knownClean.length >= 16 && cleanScannedCard.length >= 16) {
-        const scannedUnique = cleanScannedCard.slice(-8);
-        const knownUnique = knownClean.slice(-8);
-        const uniqueDist = editDistance(scannedUnique, knownUnique);
-        const first8Match = cleanScannedCard.slice(0, 8) === knownClean.slice(0, 8);
-
-        // High confidence: last 8 unique digits are very close (<=2 edits) AND shared prefix matches
-        if (uniqueDist <= 2 && first8Match) {
-          const score = uniqueDist === 0 ? 0 : 1;
-          if (score < bestCardScore) { bestCardScore = score; bestCardMatch = known; }
-          continue;
+      // Also try: if AI dropped digits, check if scanned unique is a subsequence
+      if (!bestCardMatch && scannedUnique8.length >= 4 && scannedUnique8.length < 8) {
+        // Check if scanned digits appear in order within the known unique digits
+        let si = 0;
+        for (let ki = 0; ki < knownUnique.length && si < scannedUnique8.length; ki++) {
+          if (scannedUnique8[si] === knownUnique[ki]) si++;
         }
-        // Do NOT match on just prefix + last 4 suffix — the middle digits could be completely different
+        if (si >= scannedUnique8.length * 0.7) { // 70% of scanned chars found in sequence
+          const subDist = knownUnique.length - si; // how many were skipped
+          if (subDist < bestCardDist) {
+            bestCardDist = subDist;
+            bestCardMatch = known;
+          }
+        }
       }
     }
 
-    // If we already have a rego match, only override with card match if the card match
-    // points to the SAME rego, or the card match is very confident (exact match)
     if (bestCardMatch) {
       if (!bestMatch) {
         // No rego match — use card match
         bestMatch = bestCardMatch;
-        bestScore = bestCardScore;
+        bestScore = bestCardDist;
       } else if (bestCardMatch.rego === bestMatch.rego) {
-        // Card match confirms rego match — great, keep rego match (has correct card too)
+        // Card confirms rego — great!
         bestScore = 0;
-      } else if (bestCardScore === 0) {
-        // Card is exact match but rego pointed elsewhere — trust exact card match
+      } else if (bestCardDist === 0 && bestScore > 0) {
+        // Card is exact but rego pointed elsewhere — trust exact card
         bestMatch = bestCardMatch;
-        bestScore = bestCardScore;
+        bestScore = 0;
       }
-      // Otherwise keep the rego match — rego is more reliable than card OCR
+      // Otherwise keep the rego match — rego is more reliable
     }
   }
 
-  // Strategy 3: If no match yet but we have both signals, try rego-based card lookup (strict — 1 edit max)
-  if (!bestMatch && cleanScannedRego && cleanScannedCard) {
+  // ── STRATEGY 3: Last resort — if we have rego and card but nothing matched yet ──
+  if (!bestMatch && cleanScannedRego) {
     for (const known of knownCards) {
       const regoDist = editDistance(cleanScannedRego, known.rego);
       if (regoDist <= 1) {
@@ -879,6 +898,27 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
         bestScore = 1;
         break;
       }
+    }
+  }
+
+  // Always use the known prefix + correct card from database
+  // If we matched but the card was mangled, replace with the database version
+  if (bestMatch && bestMatch.card) {
+    // Ensure the card always has the correct prefix
+    if (bestMatch.card.length === 16 && !bestMatch.card.startsWith(FLEET_CARD_PREFIX)) {
+      bestMatch.card = FLEET_CARD_PREFIX + bestMatch.card.slice(8);
+    }
+  } else if (cleanScannedCard && !bestMatch) {
+    // No match found — at minimum fix the prefix if it looks like a Plateau Trees card
+    if (cleanScannedCard.length >= 12) {
+      const fixedCard = FLEET_CARD_PREFIX + (cleanScannedCard.length > 8 ? cleanScannedCard.slice(-8) : cleanScannedCard);
+      return {
+        cardNumber: fixedCard.slice(0, 16),
+        vehicleOnCard: scannedRego || null,
+        _corrected: false,
+        _originalCard: scannedCard,
+        _originalRego: scannedRego,
+      };
     }
   }
 
@@ -2719,6 +2759,8 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         if (availableLines.length === 0) return null;
         const spPpl = parseFloat(sp.ppl) || null;
         const spLitres = parseFloat(sp.litres) || null;
+        const spType = sp.vehicleType || sp._match?.t || "Other";
+
         // If user entered a price, find the line closest to that price
         if (spPpl) {
           let best = null, bestDiff = Infinity;
@@ -2729,7 +2771,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               if (diff < bestDiff) { bestDiff = diff; best = l; }
             }
           });
-          if (best && bestDiff < 1) { // within $1/L tolerance
+          if (best && bestDiff < 1) {
             availableLines.splice(availableLines.indexOf(best), 1);
             return best;
           }
@@ -2743,12 +2785,23 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               if (diff < bestDiff) { bestDiff = diff; best = l; }
             }
           });
-          if (best && bestDiff < spLitres * 0.3) { // within 30% tolerance
+          if (best && bestDiff < spLitres * 0.3) {
             availableLines.splice(availableLines.indexOf(best), 1);
             return best;
           }
         }
-        // Fallback: next available in order
+        // Smart fallback: match by vehicle size — larger vehicles get higher litres
+        if (availableLines.length > 1) {
+          const rank = VEHICLE_FUEL_RANK[spType] || 99;
+          // Large vehicles (rank 1-5) get the highest litre line, small ones get the lowest
+          const sorted = [...availableLines].sort((a, b) => (b.litres || 0) - (a.litres || 0));
+          const best = rank <= 5 ? sorted[0] : sorted[sorted.length - 1];
+          if (best) {
+            availableLines.splice(availableLines.indexOf(best), 1);
+            return best;
+          }
+        }
+        // Final fallback: next available in order
         return availableLines.shift() || null;
       };
 
@@ -3674,27 +3727,44 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             <button onClick={() => {
               const lines = receiptData.lines;
               const otherItems = receiptData.otherItems || [];
-              // Allocate fuel line 0 → primary vehicle
-              if (lines[0]?.litres) setForm(f => ({ ...f, litres: lines[0].litres.toString() }));
-              let fuelIdx = 1;
+
+              // Build list of all vehicles: primary + split vehicles + fuel-consuming others
+              const allVehicles = [];
+              const primaryType = form._regoMatch?.t || form.vehicleType || "Other";
+              allVehicles.push({ id: "primary", type: primaryType, isPrimary: true });
+
+              const vehicleSplits = splits.filter(s => s.splitType === "vehicle");
+              const otherSplits = splits.filter(s => s.splitType === "other");
+              vehicleSplits.forEach(sp => {
+                const spMatch = sp._match || lookupRego(sp.rego, learnedDBRef.current, entriesRef.current);
+                allVehicles.push({ id: sp.id, type: spMatch?.t || sp.vehicleType || "Other", isPrimary: false });
+              });
+              // Fuel-consuming "other" items (jerry cans, chainsaws, etc)
+              const fuelOthers = otherSplits.filter(sp => FUEL_EQUIPMENT_RE.test(sp.equipment));
+              fuelOthers.forEach(sp => {
+                allVehicles.push({ id: sp.id, type: "Other", isPrimary: false, isOther: true });
+              });
+
+              // Smart match: highest litres → largest vehicle
+              const matched = smartMatchLinesToVehicles(allVehicles, lines);
+
+              // Apply primary match
+              const primaryLine = matched[0];
+              if (primaryLine?.litres) setForm(f => ({ ...f, litres: primaryLine.litres.toString() }));
+
+              // Apply split matches
               let otherIdx = 0;
               setSplits(prev => prev.map(sp => {
-                if (sp.splitType === "vehicle" && fuelIdx < lines.length) {
-                  const line = lines[fuelIdx++];
-                  return line?.litres ? { ...sp, litres: line.litres.toString(), _matchedLine: line } : sp;
+                // Find this split's match
+                const vIdx = allVehicles.findIndex(v => v.id === sp.id);
+                if (vIdx >= 0 && matched[vIdx]) {
+                  const line = matched[vIdx];
+                  return { ...sp, litres: line.litres?.toString() || sp.litres, _matchedLine: line, _matchedItem: null };
                 }
-                if (sp.splitType === "other") {
-                  // Is this a fuel-consuming item (jerry can, chainsaw, etc)?
-                  const isFuel = FUEL_EQUIPMENT_RE.test(sp.equipment);
-                  if (isFuel && fuelIdx < lines.length) {
-                    // Match to next fuel line
-                    const line = lines[fuelIdx++];
-                    return { ...sp, litres: line.litres?.toString() || sp.litres, _matchedLine: line, _matchedItem: null };
-                  } else if (!isFuel && otherIdx < otherItems.length) {
-                    // Match to next non-fuel otherItem
-                    const item = otherItems[otherIdx++];
-                    return item ? { ...sp, _matchedItem: item, _matchedLine: null } : sp;
-                  }
+                // Non-fuel other items → match to otherItems
+                if (sp.splitType === "other" && !FUEL_EQUIPMENT_RE.test(sp.equipment) && otherIdx < otherItems.length) {
+                  const item = otherItems[otherIdx++];
+                  return item ? { ...sp, _matchedItem: item, _matchedLine: null } : sp;
                 }
                 return sp;
               }));
