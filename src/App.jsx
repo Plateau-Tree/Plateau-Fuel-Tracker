@@ -62,6 +62,7 @@ const db = {
         hasReceipt: meta.hasReceipt || false,
         _aiConfidence: meta._aiConfidence || null,
         _aiIssues: meta._aiIssues || [],
+        receiptUrl: meta.receiptUrl || null,
       };
     });
   },
@@ -101,6 +102,7 @@ const db = {
         hasReceipt: entry.hasReceipt || false,
         _aiConfidence: entry._aiConfidence || null,
         _aiIssues: entry._aiIssues || [],
+        receiptUrl: entry.receiptUrl || null,
       },
     });
     if (error) console.error("DB saveEntry:", error);
@@ -1835,7 +1837,7 @@ function ReceiptViewer({ entryId, entry, loadFn, onClose }) {
         {loading ? (
           <div style={{ textAlign: "center", padding: "32px 0", color: "#94a3b8" }}>Loading receipt...</div>
         ) : img ? (
-          <img src={`data:${img.mime};base64,${img.b64}`} alt="Receipt" style={{
+          <img src={img.url || `data:${img.mime};base64,${img.b64}`} alt="Receipt" style={{
             width: "100%", borderRadius: 8, border: "1px solid #e2e8f0",
           }} />
         ) : (
@@ -2434,22 +2436,72 @@ export default function App() {
   const [confirmAction, setConfirmAction] = useState(null);
   const [addVehicle, setAddVehicle] = useState({ rego: "", div: "Tree", type: "Ute", name: "", owner: "", fuel: "Diesel" });
 
-  // ── Receipt image storage ──
+  // ── Receipt image storage (Supabase Storage) ──
   const saveReceiptImage = async (entryId, b64, mime) => {
-    try { await window.storage.set(`fuel_receipt_img_${entryId}`, JSON.stringify({ b64, mime })); }
-    catch (_) {}
+    try {
+      if (supabase) {
+        // Upload to Supabase Storage bucket "receipts"
+        const ext = mime === "image/png" ? "png" : "jpg";
+        const filePath = `${entryId}.${ext}`;
+        // Convert base64 to Blob
+        const byteChars = atob(b64);
+        const byteArr = new Uint8Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
+        const blob = new Blob([byteArr], { type: mime });
+
+        const { error } = await supabase.storage.from("receipts").upload(filePath, blob, {
+          contentType: mime, upsert: true,
+        });
+        if (error) {
+          console.error("Storage upload error:", error);
+          // Fallback to localStorage
+          await window.storage.set(`fuel_receipt_img_${entryId}`, JSON.stringify({ b64, mime }));
+          return;
+        }
+        // Get public URL and store it on the entry
+        const { data: urlData } = supabase.storage.from("receipts").getPublicUrl(filePath);
+        if (urlData?.publicUrl) {
+          // Save URL to the entry's metadata
+          const entry = entriesRef.current.find(e => e.id === entryId);
+          if (entry) {
+            entry.receiptUrl = urlData.publicUrl;
+            entry.hasReceipt = true;
+            db.saveEntry(entry).catch(() => {});
+          }
+        }
+      } else {
+        // No Supabase — fallback to localStorage
+        await window.storage.set(`fuel_receipt_img_${entryId}`, JSON.stringify({ b64, mime }));
+      }
+    } catch (err) {
+      console.error("saveReceiptImage error:", err);
+      // Fallback to localStorage
+      try { await window.storage.set(`fuel_receipt_img_${entryId}`, JSON.stringify({ b64, mime })); } catch (_) {}
+    }
   };
 
   const loadReceiptImage = async (entryId) => {
     try {
+      // First check if entry has a Supabase URL
+      const entry = entriesRef.current.find(e => e.id === entryId);
+      if (entry?.receiptUrl) {
+        return { url: entry.receiptUrl };
+      }
+      // Fallback: try localStorage
       const res = await window.storage.get(`fuel_receipt_img_${entryId}`);
       return res?.value ? JSON.parse(res.value) : null;
     } catch (_) { return null; }
   };
 
   const deleteReceiptImage = async (entryId) => {
-    try { await window.storage.delete(`fuel_receipt_img_${entryId}`); }
-    catch (_) {}
+    try {
+      if (supabase) {
+        // Try to delete from Supabase Storage (both jpg and png)
+        await supabase.storage.from("receipts").remove([`${entryId}.jpg`, `${entryId}.png`]);
+      }
+      // Also clean up localStorage fallback
+      await window.storage.delete(`fuel_receipt_img_${entryId}`);
+    } catch (_) {}
   };
 
   const receiptRef = useRef();
