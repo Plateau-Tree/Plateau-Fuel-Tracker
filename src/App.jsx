@@ -2417,6 +2417,7 @@ export default function App() {
   const [cardSearch, setCardSearch] = useState("");
   const [editingCard, setEditingCard] = useState(null); // { oldCard, newCard, newDrivers, newRegos } for inline card header editing
   const [expandedFuelType, setExpandedFuelType] = useState(null);
+  const [collapsedFleetGroups, setCollapsedFleetGroups] = useState({});
   const [dashPeriod, setDashPeriod] = useState("monthly"); // "daily" | "weekly" | "monthly" | "custom" | "all"
   const [dashDate, setDashDate] = useState(() => new Date().toISOString().slice(0, 10)); // YYYY-MM-DD
   const [dashDateEnd, setDashDateEnd] = useState(() => new Date().toISOString().slice(0, 10));
@@ -6084,81 +6085,128 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           </div>
         </div>
 
-        {/* Fleet table */}
-        <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
-          <div style={{ overflowX: "auto" }}>
-            <table className="data-table">
-              <thead>
-                <tr style={{ background: "#f8fafc" }}>
-                  <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Vehicle</th>
-                  <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Division</th>
-                  <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Type</th>
-                  <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Odometer</th>
-                  <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Fill-ups</th>
-                  <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Total KM</th>
-                  <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Total L</th>
-                  <th style={{ borderBottom: "2px solid #e2e8f0", color: "#1e40af" }}>Avg L/km</th>
-                  <th style={{ borderBottom: "2px solid #e2e8f0", color: "#1e40af" }}>Trend</th>
-                  <th style={{ borderBottom: "2px solid #e2e8f0", color: "#854d0e" }}>Service</th>
-                  <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Flags</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map(v => {
-                  const sc = svcColor(v.svcStatus);
-                  const effRange = EFFICIENCY_RANGES[v.vt] || EFFICIENCY_RANGES.Other;
-                  return (
-                    <tr key={v.rego} style={{
-                      background: v.svcStatus === "overdue" ? "#fef2f2" : v.svcStatus === "approaching" ? "#fffdf5" : "white",
-                    }}>
-                      <td style={{ fontWeight: 700, color: "#0f172a" }}>
-                        <div>{v.rego}</div>
-                        {v.vehicleName && <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 400 }}>{v.vehicleName}</div>}
-                      </td>
-                      <td><Pill label={v.div} color={v.vt} /></td>
-                      <td style={{ fontSize: 10, color: "#64748b" }}>{v.vt}</td>
-                      <td style={{ color: "#374151" }}>{v.latestOdo ? v.latestOdo.toLocaleString() : "\u2014"}</td>
-                      <td style={{ color: "#64748b", textAlign: "center" }}>{v.fillUps}</td>
-                      <td style={{ color: "#374151" }}>{v.totalKm > 0 ? v.totalKm.toLocaleString() : "\u2014"}</td>
-                      <td style={{ color: "#374151" }}>{v.totalLitres > 0 ? `${v.totalLitres.toFixed(0)}L` : "\u2014"}</td>
-                      <td style={{
-                        fontWeight: 600,
-                        color: v.avgLPerKm ? (v.avgLPerKm > effRange.high ? "#dc2626" : v.avgLPerKm < effRange.low ? "#2563eb" : "#15803d") : "#94a3b8",
-                      }}>
-                        {v.avgLPerKm ? v.avgLPerKm.toFixed(3) : "\u2014"}
-                      </td>
-                      <td>
-                        {v.trend === "worsening" && <span style={{ color: "#dc2626", fontWeight: 600, fontSize: 10 }}>{"\u2191"} Worsening</span>}
-                        {v.trend === "improving" && <span style={{ color: "#15803d", fontWeight: 600, fontSize: 10 }}>{"\u2193"} Improving</span>}
-                        {v.trend === "stable" && <span style={{ color: "#64748b", fontSize: 10 }}>{"\u2192"} Stable</span>}
-                        {!v.trend && <span style={{ color: "#cbd5e1", fontSize: 10 }}>\u2014</span>}
-                      </td>
-                      <td>
-                        <span className={`flag-badge flag-${v.svcStatus === "overdue" ? "danger" : v.svcStatus === "approaching" ? "warn" : "ok"}`} style={{ fontSize: 9 }}>
-                          {sc.label}
-                          {v.kmToService != null && v.svcStatus !== "unknown" && (
-                            <span style={{ marginLeft: 3, opacity: 0.8 }}>
-                              {v.svcStatus === "overdue" ? `+${Math.abs(v.kmToService).toLocaleString()}` : v.kmToService.toLocaleString()}km
-                            </span>
-                          )}
-                        </span>
-                      </td>
-                      <td>
-                        {v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")).length > 0 ? (
-                          <span className="flag-badge flag-danger" style={{ fontSize: 9, cursor: "pointer" }} onClick={() => setShowFlags(true)}>
-                            {v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")).length}
-                          </span>
-                        ) : (
-                          <span style={{ color: "#86efac", fontSize: 12 }}>{"\u2713"}</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        {/* Fleet table — grouped by division → vehicle type */}
+        {(() => {
+          // Group sorted vehicles by division → vehicle type
+          const groups = {};
+          sorted.forEach(v => {
+            const div = v.div || "Other";
+            const vt = v.vt || "Other";
+            const key = `${div}|||${vt}`;
+            if (!groups[key]) groups[key] = { div, vt, vehicles: [] };
+            groups[key].vehicles.push(v);
+          });
+          // Sort groups: Tree first, then Landscape, then by vehicle type
+          const divOrder = { Tree: 0, Landscape: 1 };
+          const groupList = Object.values(groups).sort((a, b) => {
+            const da = divOrder[a.div] ?? 2, db = divOrder[b.div] ?? 2;
+            if (da !== db) return da - db;
+            return a.vt.localeCompare(b.vt);
+          });
+          const toggleGroup = (key) => setCollapsedFleetGroups(prev => ({ ...prev, [key]: !prev[key] }));
+          const DIV_COLORS = { Tree: { bg: "#f0fdf4", border: "#86efac", text: "#15803d" }, Landscape: { bg: "#eff6ff", border: "#93c5fd", text: "#1e40af" } };
+
+          return groupList.map(group => {
+            const key = `${group.div}|||${group.vt}`;
+            const isCollapsed = collapsedFleetGroups[key];
+            const dc = DIV_COLORS[group.div] || { bg: "#f8fafc", border: "#e2e8f0", text: "#374151" };
+            const groupFlags = group.vehicles.reduce((s, v) => s + v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")).length, 0);
+            const groupOverdue = group.vehicles.filter(v => v.svcStatus === "overdue").length;
+
+            return (
+              <div key={key} style={{ marginBottom: 10 }}>
+                <button onClick={() => toggleGroup(key)} style={{
+                  width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "10px 14px", borderRadius: isCollapsed ? 10 : "10px 10px 0 0",
+                  border: `1px solid ${dc.border}`, background: dc.bg, cursor: "pointer", fontFamily: "inherit",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 12, color: "#64748b", transition: "transform 0.2s", transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)" }}>{"\u25BC"}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: dc.text }}>{group.div}</span>
+                    <span style={{ fontSize: 12, color: "#64748b", fontWeight: 500 }}>{"\u00B7"} {group.vt}</span>
+                    <span style={{ fontSize: 11, color: "#94a3b8" }}>({group.vehicles.length})</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    {groupOverdue > 0 && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#fef2f2", color: "#dc2626", fontWeight: 600 }}>{groupOverdue} overdue</span>}
+                    {groupFlags > 0 && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "#fef2f2", color: "#dc2626", fontWeight: 600 }}>{groupFlags} flags</span>}
+                  </div>
+                </button>
+                {!isCollapsed && (
+                  <div style={{ background: "white", border: `1px solid ${dc.border}`, borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden" }}>
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="data-table">
+                        <thead>
+                          <tr style={{ background: "#f8fafc" }}>
+                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Vehicle</th>
+                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Odometer</th>
+                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Fill-ups</th>
+                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Total KM</th>
+                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Total L</th>
+                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#1e40af" }}>Avg L/km</th>
+                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#1e40af" }}>Trend</th>
+                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#854d0e" }}>Service</th>
+                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Flags</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {group.vehicles.map(v => {
+                            const sc = svcColor(v.svcStatus);
+                            const effRange = EFFICIENCY_RANGES[v.vt] || EFFICIENCY_RANGES.Other;
+                            return (
+                              <tr key={v.rego} style={{
+                                background: v.svcStatus === "overdue" ? "#fef2f2" : v.svcStatus === "approaching" ? "#fffdf5" : "white",
+                              }}>
+                                <td style={{ fontWeight: 700, color: "#0f172a" }}>
+                                  <div>{v.rego}</div>
+                                  {v.vehicleName && <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 400 }}>{v.vehicleName}</div>}
+                                </td>
+                                <td style={{ color: "#374151" }}>{v.latestOdo ? v.latestOdo.toLocaleString() : "\u2014"}</td>
+                                <td style={{ color: "#64748b", textAlign: "center" }}>{v.fillUps}</td>
+                                <td style={{ color: "#374151" }}>{v.totalKm > 0 ? v.totalKm.toLocaleString() : "\u2014"}</td>
+                                <td style={{ color: "#374151" }}>{v.totalLitres > 0 ? `${v.totalLitres.toFixed(0)}L` : "\u2014"}</td>
+                                <td style={{
+                                  fontWeight: 600,
+                                  color: v.avgLPerKm ? (v.avgLPerKm > effRange.high ? "#dc2626" : v.avgLPerKm < effRange.low ? "#2563eb" : "#15803d") : "#94a3b8",
+                                }}>
+                                  {v.avgLPerKm ? v.avgLPerKm.toFixed(3) : "\u2014"}
+                                </td>
+                                <td>
+                                  {v.trend === "worsening" && <span style={{ color: "#dc2626", fontWeight: 600, fontSize: 10 }}>{"\u2191"} Worsening</span>}
+                                  {v.trend === "improving" && <span style={{ color: "#15803d", fontWeight: 600, fontSize: 10 }}>{"\u2193"} Improving</span>}
+                                  {v.trend === "stable" && <span style={{ color: "#64748b", fontSize: 10 }}>{"\u2192"} Stable</span>}
+                                  {!v.trend && <span style={{ color: "#cbd5e1", fontSize: 10 }}>{"\u2014"}</span>}
+                                </td>
+                                <td>
+                                  <span className={`flag-badge flag-${v.svcStatus === "overdue" ? "danger" : v.svcStatus === "approaching" ? "warn" : "ok"}`} style={{ fontSize: 9 }}>
+                                    {sc.label}
+                                    {v.kmToService != null && v.svcStatus !== "unknown" && (
+                                      <span style={{ marginLeft: 3, opacity: 0.8 }}>
+                                        {v.svcStatus === "overdue" ? `+${Math.abs(v.kmToService).toLocaleString()}` : v.kmToService.toLocaleString()}km
+                                      </span>
+                                    )}
+                                  </span>
+                                </td>
+                                <td>
+                                  {v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")).length > 0 ? (
+                                    <span className="flag-badge flag-danger" style={{ fontSize: 9, cursor: "pointer" }} onClick={() => setShowFlags(true)}>
+                                      {v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")).length}
+                                    </span>
+                                  ) : (
+                                    <span style={{ color: "#86efac", fontSize: 12 }}>{"\u2713"}</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          });
+        })()}
 
         {/* Efficiency anomalies section */}
         {fleet.some(v => v.anomalies.length > 0) && (
