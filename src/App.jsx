@@ -3685,9 +3685,9 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
           </>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: splitMode ? "1fr 1fr" : "1fr", gap: 10 }}>
           <div style={{ marginBottom: 14 }}>
-            <label style={{ display: "block", fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 5 }}>
+            <label style={{ display: "block", fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 5, textAlign: splitMode ? "left" : "center" }}>
               Odometer / Hours Reading<span style={{ color: "#ef4444", marginLeft: 2 }}>*</span>
             </label>
             <input
