@@ -2418,6 +2418,7 @@ export default function App() {
   const [editingCard, setEditingCard] = useState(null); // { oldCard, newCard, newDrivers, newRegos } for inline card header editing
   const [expandedFuelType, setExpandedFuelType] = useState(null);
   const [collapsedFleetGroups, setCollapsedFleetGroups] = useState({});
+  const [vehicleSpendSort, setVehicleSpendSort] = useState("cost-desc");
   const [dashPeriod, setDashPeriod] = useState("monthly"); // "daily" | "weekly" | "monthly" | "custom" | "all"
   const [dashDate, setDashDate] = useState(() => new Date().toISOString().slice(0, 10)); // YYYY-MM-DD
   const [dashDateEnd, setDashDateEnd] = useState(() => new Date().toISOString().slice(0, 10));
@@ -5954,15 +5955,40 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             showToast("Dashboard report exported");
           };
 
+          const sortedPV = [...periodVehicles].sort((a, b) => {
+            switch (vehicleSpendSort) {
+              case "cost-desc": return b.cost - a.cost;
+              case "cost-asc": return a.cost - b.cost;
+              case "litres-desc": return b.litres - a.litres;
+              case "litres-asc": return a.litres - b.litres;
+              case "fills-desc": return b.fills - a.fills;
+              case "km-desc": return b.km - a.km;
+              case "alpha-asc": return a.rego.localeCompare(b.rego);
+              case "alpha-desc": return b.rego.localeCompare(a.rego);
+              default: return b.cost - a.cost;
+            }
+          });
+
           return (
           <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden", marginBottom: 16 }}>
-            <div style={{ padding: "10px 14px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ padding: "10px 14px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <span style={{ fontSize: 12, fontWeight: 700, color: "#374151" }}>{"\uD83D\uDE97"} Vehicle Spend — {range.label}</span>
-              <button onClick={exportDashboard} style={{
-                padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600,
-                cursor: "pointer", fontFamily: "inherit",
-                background: "#16a34a", color: "white", border: "none",
-              }}>{"\uD83D\uDCE5"} Export</button>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <select value={vehicleSpendSort} onChange={e => setVehicleSpendSort(e.target.value)} style={{
+                  padding: "4px 8px", borderRadius: 6, fontSize: 11, fontWeight: 500,
+                  fontFamily: "inherit", color: "#374151", border: "1px solid #e2e8f0",
+                  background: "white", cursor: "pointer", outline: "none",
+                }}>
+                  {[["cost-desc","Highest Cost"],["cost-asc","Lowest Cost"],["litres-desc","Most Litres"],["litres-asc","Least Litres"],["fills-desc","Most Fill-ups"],["km-desc","Most KM"],["alpha-asc","A \u2192 Z"],["alpha-desc","Z \u2192 A"]].map(([val, label]) => (
+                    <option key={val} value={val}>{label}</option>
+                  ))}
+                </select>
+                <button onClick={exportDashboard} style={{
+                  padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                  cursor: "pointer", fontFamily: "inherit",
+                  background: "#16a34a", color: "white", border: "none",
+                }}>{"\uD83D\uDCE5"} Export</button>
+              </div>
             </div>
             <div style={{ overflowX: "auto" }}>
               <table className="data-table">
@@ -5979,7 +6005,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                   </tr>
                 </thead>
                 <tbody>
-                  {periodVehicles.map(v => (
+                  {sortedPV.map(v => (
                     <tr key={v.rego}>
                       <td style={{ fontWeight: 700, color: "#0f172a" }}>{v.rego}</td>
                       <td style={{ color: "#64748b", fontSize: 11 }}>{v.division}</td>
