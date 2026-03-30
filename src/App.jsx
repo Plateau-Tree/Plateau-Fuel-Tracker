@@ -2411,6 +2411,8 @@ export default function App() {
   const [manualCardRego, setManualCardRego] = useState("");
   const [dataFilter, setDataFilter] = useState("All");
   const [dataSearch, setDataSearch] = useState("");
+  const [driverSearch, setDriverSearch] = useState("");
+  const [expandedDriver, setExpandedDriver] = useState(null);
   const [cardMonth, setCardMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; });
   const [cardSearch, setCardSearch] = useState("");
   const [editingCard, setEditingCard] = useState(null); // { oldCard, newCard, newDrivers, newRegos } for inline card header editing
@@ -6704,6 +6706,181 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     );
   };
 
+  // ── Driver Database ────────────────────────────────────────────────────
+  const renderDrivers = () => {
+    // Build driver profiles from entries
+    const driverMap = {};
+    for (const e of entries) {
+      const name = e.driverName || e.driver || "";
+      if (!name) continue;
+      const key = name.trim().toLowerCase();
+      if (!driverMap[key]) {
+        driverMap[key] = { name: name.trim(), entries: [], vehicles: new Set(), divisions: new Set(), totalLitres: 0, totalCost: 0, lastEntry: null };
+      }
+      const d = driverMap[key];
+      d.entries.push(e);
+      if (e.registration) d.vehicles.add(e.registration);
+      if (e.division) d.divisions.add(e.division);
+      d.totalLitres += parseFloat(e.litres) || 0;
+      d.totalCost += parseFloat(e.totalCost) || 0;
+      if (!d.lastEntry || (e.date && e.date > (d.lastEntry.date || ""))) d.lastEntry = e;
+    }
+
+    // Sort by name
+    let driverList = Object.values(driverMap).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Filter by search
+    if (driverSearch.trim()) {
+      const q = driverSearch.trim().toLowerCase();
+      driverList = driverList.filter(d =>
+        d.name.toLowerCase().includes(q) ||
+        [...d.vehicles].some(v => v.toLowerCase().includes(q))
+      );
+    }
+
+    return (
+      <div className="fade-in">
+        <div style={{ fontSize: 20, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Driver Database</div>
+        <div style={{ fontSize: 13, color: "#64748b", marginBottom: 16 }}>
+          {driverList.length} driver{driverList.length !== 1 ? "s" : ""} found {"\u00B7"} Search by name or rego
+        </div>
+
+        {/* Search */}
+        <input value={driverSearch} onChange={e => setDriverSearch(e.target.value)} placeholder="Search drivers by name or vehicle rego..."
+          style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 14, outline: "none", fontFamily: "inherit", color: "#0f172a", marginBottom: 16 }}
+          onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+
+        {/* Summary stats */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
+          {[
+            ["Total Drivers", driverList.length, "#1e40af", "#eff6ff"],
+            ["Total Entries", driverList.reduce((s, d) => s + d.entries.length, 0), "#15803d", "#f0fdf4"],
+            ["Total Spend", `$${driverList.reduce((s, d) => s + d.totalCost, 0).toFixed(2)}`, "#b45309", "#fffbeb"],
+          ].map(([label, val, color, bg]) => (
+            <div key={label} style={{ background: bg, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a", marginTop: 2 }}>{val}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Driver list */}
+        {driverList.length === 0 && (
+          <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>
+            {driverSearch ? "No drivers match your search" : "No entries recorded yet"}
+          </div>
+        )}
+
+        {driverList.map(driver => {
+          const isExpanded = expandedDriver === driver.name.toLowerCase();
+          const lastE = driver.lastEntry;
+          const sortedEntries = [...driver.entries].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+          return (
+            <div key={driver.name} style={{ marginBottom: 8 }}>
+              {/* Driver header */}
+              <button onClick={() => setExpandedDriver(isExpanded ? null : driver.name.toLowerCase())} style={{
+                width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "12px 14px", borderRadius: 10, border: "1px solid #e2e8f0",
+                background: isExpanded ? "#f0fdf4" : "white", cursor: "pointer", fontFamily: "inherit",
+                transition: "all 0.15s",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{
+                    width: 36, height: 36, borderRadius: "50%", background: "#16a34a", color: "white",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 14, fontWeight: 700,
+                  }}>
+                    {driver.name.split(" ").map(n => n[0] || "").join("").toUpperCase().slice(0, 2)}
+                  </div>
+                  <div style={{ textAlign: "left" }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>{driver.name}</div>
+                    <div style={{ fontSize: 11, color: "#64748b" }}>
+                      {driver.entries.length} entr{driver.entries.length !== 1 ? "ies" : "y"} {"\u00B7"} {[...driver.divisions].join(", ")} {"\u00B7"} {[...driver.vehicles].size} vehicle{driver.vehicles.size !== 1 ? "s" : ""}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>${driver.totalCost.toFixed(2)}</div>
+                  <div style={{ fontSize: 10, color: "#94a3b8" }}>
+                    Last: {lastE?.date || "—"}
+                  </div>
+                </div>
+              </button>
+
+              {/* Expanded driver details */}
+              {isExpanded && (
+                <div className="fade-in" style={{
+                  border: "1px solid #e2e8f0", borderTop: "none", borderRadius: "0 0 10px 10px",
+                  padding: "12px 14px", background: "#f8fafc",
+                }}>
+                  {/* Driver summary */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+                    {[
+                      ["Total Litres", `${driver.totalLitres.toFixed(1)}L`],
+                      ["Total Cost", `$${driver.totalCost.toFixed(2)}`],
+                      ["Vehicles", [...driver.vehicles].join(", ") || "—"],
+                      ["Division", [...driver.divisions].join(", ") || "—"],
+                    ].map(([label, val]) => (
+                      <div key={label} style={{ background: "white", borderRadius: 6, padding: "6px 8px", border: "1px solid #e2e8f0" }}>
+                        <div style={{ fontSize: 9, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a", marginTop: 1, wordBreak: "break-all" }}>{val}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Last entry highlight */}
+                  {lastE && (
+                    <div style={{
+                      background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 8,
+                      padding: "8px 12px", marginBottom: 10,
+                    }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#1e40af", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>Latest Entry</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, fontSize: 11 }}>
+                        <div><span style={{ color: "#64748b" }}>Date:</span> <strong>{lastE.date || "—"}</strong></div>
+                        <div><span style={{ color: "#64748b" }}>Rego:</span> <strong>{lastE.registration || lastE.equipment || "—"}</strong></div>
+                        <div><span style={{ color: "#64748b" }}>Litres:</span> <strong>{lastE.litres || "—"}</strong></div>
+                        <div><span style={{ color: "#64748b" }}>Cost:</span> <strong>${parseFloat(lastE.totalCost || 0).toFixed(2)}</strong></div>
+                      </div>
+                      {lastE.station && <div style={{ fontSize: 10, color: "#64748b", marginTop: 3 }}>Station: {lastE.station}</div>}
+                    </div>
+                  )}
+
+                  {/* Entry history table */}
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#374151", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>Entry History</div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                      <thead>
+                        <tr style={{ background: "#e2e8f0" }}>
+                          {["Date", "Vehicle/Item", "Station", "Litres", "$/L", "Cost", "Odo"].map(h => (
+                            <th key={h} style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: "#374151", whiteSpace: "nowrap" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedEntries.map((e, i) => (
+                          <tr key={e.id || i} style={{ background: i % 2 === 0 ? "white" : "#f8fafc", borderBottom: "1px solid #f1f5f9" }}>
+                            <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{e.date || "—"}</td>
+                            <td style={{ padding: "5px 8px", fontWeight: 500 }}>{e.registration || e.equipment || "—"}</td>
+                            <td style={{ padding: "5px 8px", color: "#64748b" }}>{e.station || "—"}</td>
+                            <td style={{ padding: "5px 8px" }}>{e.litres || "—"}</td>
+                            <td style={{ padding: "5px 8px" }}>{e.pricePerLitre ? `$${parseFloat(e.pricePerLitre).toFixed(3)}` : "—"}</td>
+                            <td style={{ padding: "5px 8px", fontWeight: 500 }}>{e.totalCost ? `$${parseFloat(e.totalCost).toFixed(2)}` : "—"}</td>
+                            <td style={{ padding: "5px 8px", color: "#64748b" }}>{e.odometer || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   // ── Fleet Card Summary ───────────────────────────────────────────────────
   const renderCards = () => {
     // Parse month filter
@@ -7232,7 +7409,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
   const isAdmin = userRole === "admin";
   const navItems = isAdmin
-    ? [["submit", "+ Entry"], ["dashboard", "Dashboard"], ["data", "Data"], ["cards", "Cards"], ["settings", "\u2699"]]
+    ? [["submit", "+ Entry"], ["dashboard", "Dashboard"], ["data", "Data"], ["drivers", "Drivers"], ["cards", "Cards"], ["settings", "\u2699"]]
     : [["submit", "+ Entry"]];
 
   const handleLogin = () => {
@@ -7336,7 +7513,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         </div>
       )}
 
-      <div style={{ maxWidth: (view === "data" || view === "dashboard" || view === "cards") ? 960 : 520, margin: "0 auto", padding: "24px 16px", transition: "max-width 0.3s" }}>
+      <div style={{ maxWidth: (view === "data" || view === "dashboard" || view === "cards" || view === "drivers") ? 960 : 520, margin: "0 auto", padding: "24px 16px", transition: "max-width 0.3s" }}>
         {view === "submit" && (
           <>
             {step < 4 && <StepBar step={step} />}
@@ -7348,6 +7525,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         )}
         {view === "dashboard" && renderDashboard()}
         {view === "data" && renderData()}
+        {view === "drivers" && renderDrivers()}
         {view === "cards" && renderCards()}
         {view === "settings" && renderSettings()}
       </div>
