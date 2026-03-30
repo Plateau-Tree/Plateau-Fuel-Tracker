@@ -6181,77 +6181,6 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           </div>
         )}
 
-        {/* ── Driver Activity ── */}
-        {(() => {
-          const now = new Date();
-          const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7);
-          const allDrivers = [...new Set(entries.map(e => e.driverName).filter(Boolean))].sort();
-          const activeDrivers = new Set();
-          entries.forEach(e => {
-            if (!e.driverName || !e.date) return;
-            const d = parseDate(e.date);
-            if (d && new Date(d) >= weekAgo) activeDrivers.add(e.driverName);
-          });
-          const inactiveDrivers = allDrivers.filter(d => !activeDrivers.has(d));
-          const driverLastEntry = {};
-          entries.forEach(e => {
-            if (!e.driverName) return;
-            const d = parseDate(e.date);
-            if (!d) return;
-            const dt = new Date(d);
-            if (!driverLastEntry[e.driverName] || dt > driverLastEntry[e.driverName].dt) {
-              driverLastEntry[e.driverName] = { dt, date: e.date, rego: e.registration || e.equipment || "" };
-            }
-          });
-          if (allDrivers.length === 0) return null;
-          return (
-            <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 20 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", letterSpacing: "0.04em", textTransform: "uppercase" }}>{"\uD83D\uDC64"} Driver Activity (last 7 days)</div>
-                <div style={{ display: "flex", gap: 8, fontSize: 11 }}>
-                  <span style={{ color: "#15803d", fontWeight: 600 }}>{activeDrivers.size} active</span>
-                  {inactiveDrivers.length > 0 && <span style={{ color: "#dc2626", fontWeight: 600 }}>{inactiveDrivers.length} inactive</span>}
-                </div>
-              </div>
-              {activeDrivers.size > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: inactiveDrivers.length > 0 ? 10 : 0 }}>
-                  {[...activeDrivers].sort().map(d => {
-                    const info = driverLastEntry[d];
-                    return (
-                      <div key={d} title={info ? `Last: ${info.date} \u00B7 ${info.rego}` : ""} style={{
-                        padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 500,
-                        background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac",
-                      }}>{"\u2713"} {d}</div>
-                    );
-                  })}
-                </div>
-              )}
-              {inactiveDrivers.length > 0 && (
-                <>
-                  <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>No entries this week</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                    {inactiveDrivers.map(d => {
-                      const info = driverLastEntry[d];
-                      const daysSince = info ? Math.round((now - info.dt) / 86400000) : null;
-                      return (
-                        <div key={d} title={info ? `Last: ${info.date} \u00B7 ${info.rego}` : "No entries recorded"} style={{
-                          padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 500,
-                          background: daysSince && daysSince > 30 ? "#fef2f2" : "#f8fafc",
-                          color: daysSince && daysSince > 30 ? "#dc2626" : "#64748b",
-                          border: `1px solid ${daysSince && daysSince > 30 ? "#fca5a5" : "#e2e8f0"}`,
-                        }}>
-                          {d}
-                          {daysSince != null && <span style={{ marginLeft: 4, fontSize: 9, color: "#94a3b8" }}>{daysSince}d ago</span>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
-          );
-        })()}
-
         {/* Fuel type breakdown */}
         {(() => {
           const vehicleEntries = entries.filter(e => e.entryType !== "other");
@@ -6749,6 +6678,81 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         <input value={driverSearch} onChange={e => setDriverSearch(e.target.value)} placeholder="Search drivers by name or vehicle rego..."
           style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 14, outline: "none", fontFamily: "inherit", color: "#0f172a", marginBottom: 16 }}
           onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+
+        {/* Driver Activity */}
+        {(() => {
+          const now = new Date();
+          const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7);
+          const allDriverNames = [...new Set(entries.map(e => e.driverName || e.driver).filter(Boolean))].sort();
+          const activeDrivers = new Set();
+          entries.forEach(e => {
+            const name = e.driverName || e.driver;
+            if (!name || !e.date) return;
+            const d = parseDate(e.date);
+            if (d && new Date(d) >= weekAgo) activeDrivers.add(name);
+          });
+          const inactiveDrivers = allDriverNames.filter(d => !activeDrivers.has(d));
+          const driverLastEntry = {};
+          entries.forEach(e => {
+            const name = e.driverName || e.driver;
+            if (!name) return;
+            const d = parseDate(e.date);
+            if (!d) return;
+            const dt = new Date(d);
+            if (!driverLastEntry[name] || dt > driverLastEntry[name].dt) {
+              driverLastEntry[name] = { dt, date: e.date, rego: e.registration || e.equipment || "" };
+            }
+          });
+          if (allDriverNames.length === 0) return null;
+          return (
+            <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", letterSpacing: "0.04em", textTransform: "uppercase" }}>{"\uD83D\uDC64"} Driver Activity (last 7 days)</div>
+                <div style={{ display: "flex", gap: 8, fontSize: 11 }}>
+                  <span style={{ color: "#15803d", fontWeight: 600 }}>{activeDrivers.size} active</span>
+                  {inactiveDrivers.length > 0 && <span style={{ color: "#dc2626", fontWeight: 600 }}>{inactiveDrivers.length} inactive</span>}
+                </div>
+              </div>
+              {activeDrivers.size > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: inactiveDrivers.length > 0 ? 10 : 0 }}>
+                  {[...activeDrivers].sort().map(d => {
+                    const info = driverLastEntry[d];
+                    return (
+                      <div key={d} title={info ? `Last: ${info.date} \u00B7 ${info.rego}` : ""} style={{
+                        padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 500,
+                        background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac",
+                        cursor: "pointer",
+                      }} onClick={() => { setDriverSearch(d); setExpandedDriver(d.toLowerCase()); }}>{"\u2713"} {d}</div>
+                    );
+                  })}
+                </div>
+              )}
+              {inactiveDrivers.length > 0 && (
+                <>
+                  <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>No entries this week</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                    {inactiveDrivers.map(d => {
+                      const info = driverLastEntry[d];
+                      const daysSince = info ? Math.round((now - info.dt) / 86400000) : null;
+                      return (
+                        <div key={d} title={info ? `Last: ${info.date} \u00B7 ${info.rego}` : "No entries recorded"} style={{
+                          padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 500,
+                          background: daysSince && daysSince > 30 ? "#fef2f2" : "#f8fafc",
+                          color: daysSince && daysSince > 30 ? "#dc2626" : "#64748b",
+                          border: `1px solid ${daysSince && daysSince > 30 ? "#fca5a5" : "#e2e8f0"}`,
+                          cursor: "pointer",
+                        }} onClick={() => { setDriverSearch(d); setExpandedDriver(d.toLowerCase()); }}>
+                          {d}
+                          {daysSince != null && <span style={{ marginLeft: 4, fontSize: 9, color: "#94a3b8" }}>{daysSince}d ago</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Summary stats */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
