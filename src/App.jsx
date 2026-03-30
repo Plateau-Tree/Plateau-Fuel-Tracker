@@ -2387,7 +2387,7 @@ export default function App() {
   const [form, setForm] = useState({ driverFirstName: "", driverLastName: "", registration: "", division: "", vehicleType: "", odometer: "", ppl: "" });
   const [savedDriver, setSavedDriver] = useState(null); // { name, rego }
   const [otherMode, setOtherMode] = useState(false);
-  const [otherForm, setOtherForm] = useState({ equipment: "", station: "", fleetCard: "", cardRego: "", notes: "", division: "Tree" });
+  const [otherForm, setOtherForm] = useState({ equipment: "", station: "", fleetCard: "", cardRego: "", notes: "", division: "Tree", litres: "", ppl: "", totalCost: "" });
   const [driverCards, setDriverCards] = useState([]); // matched fleet cards for current driver name
 
   const [receiptPreview, setReceiptPreview] = useState(null);
@@ -3422,6 +3422,29 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
                     fontWeight: 500, background: "#fefce8", color: "#854d0e", border: "1px solid #fde047",
                   }}>{p}</button>
                 ))}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 5 }}>Litres</label>
+                <input value={otherForm.litres} onChange={e => setOtherForm(f => ({ ...f, litres: e.target.value }))} placeholder="e.g. 13.03" type="number" inputMode="decimal"
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 14, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                  onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 5 }}>$/L</label>
+                <input value={otherForm.ppl} onChange={e => setOtherForm(f => ({ ...f, ppl: e.target.value }))} placeholder="e.g. 1.999" type="number" inputMode="decimal"
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 14, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                  onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 5 }}>Total Cost</label>
+                <input value={otherForm.totalCost} onChange={e => setOtherForm(f => ({ ...f, totalCost: e.target.value }))}
+                  placeholder={(() => { const l = parseFloat(otherForm.litres) || 0; const p = parseFloat(otherForm.ppl) || 0; return l > 0 && p > 0 ? `$${(l * p).toFixed(2)}` : "e.g. 26.05"; })()}
+                  type="number" inputMode="decimal"
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 14, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                  onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
               </div>
             </div>
 
