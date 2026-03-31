@@ -1103,6 +1103,21 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
     }
   }
 
+  // Determine confidence level
+  // "high" = exact match or rego-confirmed card match
+  // "low"  = fuzzy match with edits and no rego confirmation
+  // "none" = no match found at all
+  let confidence = "none";
+  if (bestMatch) {
+    if (bestScore === 0) {
+      confidence = "high"; // exact match
+    } else if (bestScore === 1 && cleanScannedRego && bestMatch.rego && editDistance(cleanScannedRego, bestMatch.rego) <= 1) {
+      confidence = "high"; // rego confirmed the card match
+    } else {
+      confidence = "low"; // fuzzy match only — warn the user
+    }
+  }
+
   if (bestMatch && bestScore > 0) {
     const corrections = [];
     if (cleanScannedCard && bestMatch.card && cleanScannedCard !== bestMatch.card.toUpperCase()) {
@@ -1112,7 +1127,7 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
       corrections.push(`Rego: "${scannedRego}" → "${bestMatch.rego}"`);
     }
     if (corrections.length > 0) {
-      console.log("[Fuzzy Match] Auto-corrected:", corrections.join(", "));
+      console.log(`[Fuzzy Match] Auto-corrected (${confidence}):`, corrections.join(", "));
     }
   }
 
@@ -1120,6 +1135,7 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
     cardNumber: bestMatch?.card || scannedCard || null,
     vehicleOnCard: bestMatch?.rego || scannedRego || null,
     _corrected: bestScore > 0 && bestMatch !== null,
+    _confidence: confidence,
     _originalCard: bestScore > 0 ? scannedCard : null,
     _originalRego: bestScore > 0 ? scannedRego : null,
   };
@@ -2841,7 +2857,7 @@ Only return one of: 0, 90, 180, or 270.`;
       checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current);
-        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
+        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
       }
     } catch (e) {
       if (scanIdRef.current !== currentScanId) return;
@@ -2867,7 +2883,7 @@ Only return one of: 0, 90, 180, or 270.`;
       checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current);
-        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
+        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
       }
     } catch (e) { setError("Rotate/scan failed \u2014 " + e.message); }
     setReceiptScanning(false);
@@ -2884,7 +2900,7 @@ Only return one of: 0, 90, 180, or 270.`;
       checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current);
-        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
+        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
       }
     } catch (e) { setError("Re-scan failed \u2014 " + e.message); }
     setReceiptScanning(false);
@@ -4000,7 +4016,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       );
       if (result?.cardNumber || result?.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(result.cardNumber, result.vehicleOnCard, learnedDBRef.current);
-        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
+        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
         showToast(matched._corrected ? "Fleet card scanned (auto-corrected)" : "Fleet card scanned");
       } else {
         setError("Could not read fleet card from this photo. Try entering manually.");
@@ -4475,7 +4491,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             const cleanRego = (manualReceipt.cardRego || "").trim().toUpperCase();
             if (cleanCard || cleanRego) {
               const matched = fuzzyMatchFleetCard(cleanCard, cleanRego, learnedDBRef.current);
-              setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
+              setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
               if (cleanCard && cleanRego) learnFleetCardCorrection(cleanCard, cleanRego);
             }
 
@@ -4794,24 +4810,39 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         </div>
 
         {/* Fleet Card Section */}
-        {hasCardData && (
-          <div style={{ background: "white", border: "2px solid #fdba74", borderRadius: 10, overflow: "hidden", marginBottom: splitMode ? 12 : 20 }}>
-            <div style={{ background: "#fff7ed", padding: "10px 14px", borderBottom: "1px solid #fdba74" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#c2410c", letterSpacing: "0.04em", textTransform: "uppercase" }}>
+        {hasCardData && (() => {
+          const conf = cardData?._confidence || "none";
+          const isLow = conf === "low";
+          const borderColor = isLow ? "#fca5a5" : "#fdba74";
+          const bgColor = isLow ? "#fef2f2" : "#fff7ed";
+          const textColor = isLow ? "#dc2626" : "#c2410c";
+          return (
+          <div style={{ background: "white", border: `2px solid ${borderColor}`, borderRadius: 10, overflow: "hidden", marginBottom: splitMode ? 12 : 20 }}>
+            <div style={{ background: bgColor, padding: "10px 14px", borderBottom: `1px solid ${borderColor}` }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: textColor, letterSpacing: "0.04em", textTransform: "uppercase" }}>
                 {"\uD83D\uDCB3"} Fleet Card Details
+                {isLow && <span style={{ marginLeft: 8, padding: "2px 8px", background: "#dc2626", color: "white", borderRadius: 4, fontSize: 9, fontWeight: 700, letterSpacing: "0.05em" }}>UNSURE</span>}
               </div>
-              <div style={{ fontSize: 11, color: "#92400e", marginTop: 3, fontWeight: 500 }}>
-                {"\u26A0"} Please double-check the card number and rego below — AI scanning can misread embossed card text
+              <div style={{ fontSize: 11, color: isLow ? "#dc2626" : "#92400e", marginTop: 3, fontWeight: isLow ? 700 : 500 }}>
+                {isLow
+                  ? "\u26A0 Low confidence match — the AI could not clearly read this fleet card. Please verify the card number and rego manually."
+                  : "\u26A0 Please double-check the card number and rego below — AI scanning can misread embossed card text"}
               </div>
+              {isLow && cardData?._originalCard && (
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 4 }}>
+                  AI read: card "{cardData._originalCard}"{cardData._originalRego ? `, rego "${cardData._originalRego}"` : ""} — auto-corrected to closest match
+                </div>
+              )}
             </div>
             {cardRows.map(({ label, val, set }, i) => (
               <div key={label} style={rowStyle(i, cardRows.length)}>
                 <span style={labelStyle}>{label}</span>
-                <input value={val} onChange={e => set(e.target.value)} style={{...inputStyle, fontWeight: 700, color: "#c2410c"}} onFocus={focusStyle} onBlur={blurStyle} />
+                <input value={val} onChange={e => set(e.target.value)} style={{...inputStyle, fontWeight: 700, color: isLow ? "#dc2626" : "#c2410c"}} onFocus={focusStyle} onBlur={blurStyle} />
               </div>
             ))}
           </div>
-        )}
+          );
+        })()}
         {!hasCardData && <div style={{ marginBottom: splitMode ? 12 : 20 }} />}
 
         {/* Split entries — matched to scanned data */}
