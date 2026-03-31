@@ -571,6 +571,38 @@ function normalizeReceiptData(data) {
   console.log("totalCost:", data.totalCost, "litres:", data.litres, "pricePerLitre:", data.pricePerLitre);
   console.log("lines:", JSON.stringify(data.lines, null, 2));
   console.log("otherItems:", JSON.stringify(data.otherItems, null, 2));
+  // Auto-correct year misreads: if scanned date has wrong year but same day/month,
+  // fix to current year (e.g. "01/04/2025" → "01/04/2026" when current year is 2026)
+  if (data.date) {
+    const scannedTs = parseDate(data.date);
+    if (scannedTs) {
+      const scanned = new Date(scannedTs);
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const scannedYear = scanned.getFullYear();
+      // If year differs but day+month match (or are very close), it's a year misread
+      if (scannedYear !== currentYear && Math.abs(scannedYear - currentYear) <= 2) {
+        const dayMonthMatch = scanned.getMonth() === now.getMonth() && Math.abs(scanned.getDate() - now.getDate()) <= 3;
+        const withinReasonableRange = Math.abs(scannedYear - currentYear) === 1;
+        if (dayMonthMatch || withinReasonableRange) {
+          // Replace year in the date string
+          const oldYear2 = String(scannedYear).slice(-2);
+          const oldYear4 = String(scannedYear);
+          const newYear2 = String(currentYear).slice(-2);
+          const newYear4 = String(currentYear);
+          let fixed = data.date;
+          if (fixed.includes(oldYear4)) fixed = fixed.replace(oldYear4, newYear4);
+          else if (fixed.includes(oldYear2)) fixed = fixed.replace(new RegExp(`\\b${oldYear2}\\b`), newYear2);
+          if (fixed !== data.date) {
+            console.log(`[Date Fix] Year auto-corrected: "${data.date}" → "${fixed}"`);
+            data._originalDate = data.date;
+            data.date = fixed;
+          }
+        }
+      }
+    }
+  }
+
   // Ensure lines array exists
   if (!data.lines || !Array.isArray(data.lines) || data.lines.length === 0) {
     data.lines = [{ litres: data.litres || null, cost: data.totalCost || null, pump: null, fuelType: data.fuelType || null }];
