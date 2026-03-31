@@ -7107,16 +7107,20 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     const rawHeaders = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, "").toLowerCase());
     const colMap = {};
     rawHeaders.forEach((h, i) => {
-      if (/date|trans.*date|transaction.*date/.test(h)) colMap.date = i;
-      else if (/card.*num|card.*no|fleet.*card/.test(h)) colMap.cardNumber = i;
-      else if (/reg|rego|vehicle.*reg|registration/.test(h)) colMap.rego = i;
-      else if (/litre|liter|quantity|volume/.test(h)) colMap.litres = i;
-      else if (/price.*per.*li|unit.*price|ppl|\$.*l|rate/.test(h)) colMap.ppl = i;
-      else if (/total|amount|cost|value/.test(h)) colMap.cost = i;
-      else if (/station|site|location|merchant/.test(h)) colMap.station = i;
-      else if (/odo|odometer|km|mileage/.test(h)) colMap.odometer = i;
-      else if (/driver|name/.test(h)) colMap.driver = i;
-      else if (/product|fuel.*type|description/.test(h)) colMap.product = i;
+      if (/^transaction\s*date$/.test(h)) colMap.date = i;
+      else if (/^transaction\s*time$/.test(h)) colMap.time = i;
+      else if (/^card\s*no|fleet.*card|^card\s*num/.test(h)) colMap.cardNumber = i;
+      else if (/registration|^rego$|vehicle.*reg/.test(h)) colMap.rego = i;
+      else if (/^quantity$|^litre|^liter|^volume$/.test(h)) colMap.litres = i;
+      else if (/^unit\s*price$|price.*per.*li|^ppl$|^\$.*l$|^rate$/.test(h)) colMap.ppl = i;
+      else if (/^total$|^amount$|^total.*cost$/.test(h)) colMap.cost = i;
+      else if (/merchant.*site|station|^site$|^location$/.test(h)) colMap.station = i;
+      else if (/^odo|odometer|mileage/.test(h)) colMap.odometer = i;
+      else if (/^transaction\s*num/.test(h)) colMap.transactionNumber = i;
+      else if (/cardholder|^driver$/.test(h)) colMap.driver = i;
+      else if (/product|fuel.*type/.test(h)) colMap.product = i;
+      // Fallback: generic date column (only if transaction date not found)
+      else if (!colMap.date && /^date$/.test(h)) colMap.date = i;
     });
     // Parse rows
     const txns = [];
@@ -7135,18 +7139,23 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       const litres = parseFloat(get("litres")) || null;
       const cost = parseFloat(get("cost")?.replace(/[$,]/g, "")) || null;
       const ppl = parseFloat(get("ppl")?.replace(/[$,]/g, "")) || (litres && cost ? parseFloat((cost / litres).toFixed(4)) : null);
+      const rawCard = get("cardNumber").replace(/[\[\]\s]/g, ""); // strip [brackets] and spaces
+      const rawOdo = get("odometer");
+      const odoVal = parseFloat(rawOdo) || null;
       const txn = {
         id: `txn-${Date.now()}-${r}-${Math.random().toString(36).slice(2, 6)}`,
         date: get("date"),
-        cardNumber: get("cardNumber").replace(/\s/g, ""),
+        time: get("time") || null,
+        cardNumber: rawCard,
         rego: get("rego").toUpperCase().replace(/[^A-Z0-9]/g, ""),
         litres,
         ppl,
         cost,
         station: get("station"),
-        odometer: parseFloat(get("odometer")) || null,
+        odometer: odoVal && odoVal > 0 && odoVal !== 777 ? odoVal : null, // 777 = placeholder in fleet card data
         driver: get("driver"),
         product: get("product"),
+        transactionNumber: get("transactionNumber") || null,
         importedAt: new Date().toISOString(),
       };
       // Skip rows with no usable data
@@ -7214,8 +7223,8 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         let added = 0;
         for (const t of newTxns) {
           const dup = existing.find(ex =>
-            ex.date === t.date && ex.cardNumber === t.cardNumber &&
-            ex.cost === t.cost && ex.rego === t.rego
+            (t.transactionNumber && ex.transactionNumber && t.transactionNumber === ex.transactionNumber && t.product === ex.product) ||
+            (ex.date === t.date && ex.cardNumber === t.cardNumber && ex.cost === t.cost && ex.rego === t.rego && ex.product === t.product)
           );
           if (!dup) { existing.push(t); added++; }
         }
