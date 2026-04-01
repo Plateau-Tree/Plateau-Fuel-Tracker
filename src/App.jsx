@@ -1004,8 +1004,50 @@ function smartMatchLinesToVehicles(vehicles, fuelLines) {
   return matches;
 }
 
-function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
+function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMappings) {
   if (!scannedCard && !scannedRego) return { cardNumber: null, vehicleOnCard: null };
+
+  // ── Check learned corrections first (instant match from previous user edits) ──
+  if (learnedCardMappings && Object.keys(learnedCardMappings).length > 0) {
+    const cleanScan = scannedCard ? scannedCard.replace(/[\s*]/g, "").toUpperCase() : "";
+    const cleanRego = scannedRego ? scannedRego.toUpperCase().replace(/\s+/g, "").replace(/[^A-Z0-9]/g, "") : "";
+
+    // Try matching by card unique8
+    if (cleanScan) {
+      const scanUnique8 = cleanScan.length > 8 ? cleanScan.slice(-8) : cleanScan;
+      const mapping = learnedCardMappings[scanUnique8];
+      if (mapping) {
+        console.log(`Fleet card auto-corrected from learned mapping: "${scanUnique8}" → ${mapping.correctCard} (${mapping.correctRego})`);
+        return {
+          cardNumber: mapping.correctCard,
+          vehicleOnCard: mapping.correctRego,
+          _corrected: true,
+          _confidence: "high",
+          _confusableRegos: null,
+          _originalCard: scannedCard,
+          _originalRego: scannedRego,
+          _learnedMatch: true,
+        };
+      }
+    }
+    // Try matching by rego
+    if (cleanRego) {
+      const regoMapping = learnedCardMappings[`rego_${cleanRego}`];
+      if (regoMapping) {
+        console.log(`Fleet card auto-corrected from learned rego mapping: "${cleanRego}" → ${regoMapping.correctCard}`);
+        return {
+          cardNumber: regoMapping.correctCard,
+          vehicleOnCard: regoMapping.correctRego,
+          _corrected: true,
+          _confidence: "high",
+          _confusableRegos: null,
+          _originalCard: scannedCard,
+          _originalRego: scannedRego,
+          _learnedMatch: true,
+        };
+      }
+    }
+  }
 
   // Build a list of all known fleet cards and regos from REGO_DB + learnedDB
   const knownCards = []; // { card, rego, unique8, source }
@@ -2469,9 +2511,12 @@ export default function App() {
   const [entries, setEntries] = useState([]);
   const [serviceData, setServiceData] = useState({});
   const [learnedDB, setLearnedDB] = useState({}); // { "REGO": { t, d, n, m, dr, c, f } } — learned from driver submissions
+  const [learnedCardMappings, setLearnedCardMappings] = useState({}); // { "raw_unique8": { correctCard, correctRego, rawCard, rawRego, learnedAt } }
+  const learnedCardMappingsRef = useRef(learnedCardMappings);
   const learnedDBRef = useRef(learnedDB);
   const entriesRef = useRef(entries);
   useEffect(() => { learnedDBRef.current = learnedDB; }, [learnedDB]);
+  useEffect(() => { learnedCardMappingsRef.current = learnedCardMappings; }, [learnedCardMappings]);
   useEffect(() => { entriesRef.current = entries; }, [entries]);
   const [storageReady, setStorageReady] = useState(false);
   const [toast, setToast] = useState(null);
@@ -2692,6 +2737,11 @@ export default function App() {
         if (kRes?.value) { setApiKey(kRes.value); setApiKeyInput(kRes.value); }
         if (lRes?.value) setLearnedDB(JSON.parse(lRes.value));
         if (pRes?.value) { setAdminPasscode(pRes.value); setPasscodeInput(pRes.value); }
+        // Load learned card corrections
+        try {
+          const cmRes = await window.storage.get("fuel_learned_card_mappings");
+          if (cmRes?.value) setLearnedCardMappings(JSON.parse(cmRes.value));
+        } catch (_) {}
 
         // Then, try to load from Supabase (cloud — shared across all devices)
         if (supabase) {
@@ -2709,6 +2759,10 @@ export default function App() {
           if (cloudApiKey) { setApiKey(cloudApiKey); setApiKeyInput(cloudApiKey); }
           // Load fleet card transactions
           db.loadFleetCardTransactions().then(txns => { if (txns?.length) setFleetCardTxns(txns); }).catch(() => {});
+          // Load learned card corrections from cloud
+          db.loadSetting("learned_card_mappings").then(raw => {
+            if (raw) { try { setLearnedCardMappings(JSON.parse(raw)); } catch (_) {} }
+          }).catch(() => {});
         }
 
         setEntries(localEntries);
@@ -2804,23 +2858,61 @@ export default function App() {
     persistResolved(rest, fid, true);
   };
 
+  // Persist learned card mappings to local + cloud storage
+  const persistCardMappings = async (newMappings) => {
+    learnedCardMappingsRef.current = newMappings;
+    setLearnedCardMappings(newMappings);
+    try { await window.storage.set("fuel_learned_card_mappings", JSON.stringify(newMappings)); } catch (_) {}
+    db.saveSetting("learned_card_mappings", JSON.stringify(newMappings)).catch(() => {});
+  };
+
   // Learn fleet card ↔ rego association immediately when user edits card data on Steps 2/3
   // This ensures future scans benefit from manual corrections without waiting for submission
-  const learnFleetCardCorrection = useCallback((cardNumber, cardRego) => {
+  // Also learns raw AI misread → correct card mapping for future auto-correction
+  const learnFleetCardCorrection = useCallback((cardNumber, cardRego, rawCardFromAI, rawRegoFromAI) => {
     if (!cardRego || !cardNumber) return;
     const rego = cardRego.toUpperCase().replace(/\s+/g, "");
     const card = cardNumber.replace(/\s/g, "");
     if (!rego || !card || card.length < 10) return;
 
+    // Learn the rego → card association
     const currentDB = learnedDBRef.current;
     const existing = currentDB[rego] || {};
+    if (existing.c !== card) {
+      const updated = { ...existing, c: card };
+      const newLearned = { ...currentDB, [rego]: updated };
+      persistLearned(newLearned);
+    }
 
-    // Only update if the card number actually changed
-    if (existing.c === card) return;
+    // Learn the raw AI misread → correct mapping (so future identical misreads auto-correct)
+    const rawCard = rawCardFromAI || "";
+    const rawRego = rawRegoFromAI || "";
+    const cleanRawCard = rawCard.replace(/[\s*]/g, "").toUpperCase();
+    const cleanRawRego = rawRego.toUpperCase().replace(/\s+/g, "").replace(/[^A-Z0-9]/g, "");
 
-    const updated = { ...existing, c: card };
-    const newLearned = { ...currentDB, [rego]: updated };
-    persistLearned(newLearned);
+    // Only learn if the AI read something different from the corrected value
+    const cardDiffers = cleanRawCard && cleanRawCard !== card.toUpperCase();
+    const regoDiffers = cleanRawRego && cleanRawRego !== rego;
+
+    if (cardDiffers || regoDiffers) {
+      const currentMappings = learnedCardMappingsRef.current;
+      // Key by the raw card unique8 (or raw rego if no card was read)
+      const rawKey = cleanRawCard
+        ? (cleanRawCard.length > 8 ? cleanRawCard.slice(-8) : cleanRawCard)
+        : `rego_${cleanRawRego}`;
+
+      const newMapping = {
+        correctCard: card,
+        correctRego: rego,
+        rawCard: cleanRawCard || null,
+        rawRego: cleanRawRego || null,
+        learnedAt: new Date().toISOString(),
+      };
+
+      const updatedMappings = { ...currentMappings, [rawKey]: newMapping };
+      persistCardMappings(updatedMappings);
+      console.log(`Learned card correction: "${rawKey}" → card ${card}, rego ${rego}`);
+    }
   }, []);
 
   // Learn from every submission — driver corrections override the static spreadsheet DB
@@ -3018,7 +3110,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       setReceiptData(normalized);
       checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
-        const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current);
+        const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
         setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
       }
     } catch (e) {
@@ -3044,7 +3136,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       setReceiptData(normalized);
       checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
-        const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current);
+        const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
         setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
       }
     } catch (e) { setError("Rotate/scan failed \u2014 " + e.message); }
@@ -3061,7 +3153,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       setReceiptData(normalized);
       checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
-        const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current);
+        const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
         setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
       }
     } catch (e) { setError("Re-scan failed \u2014 " + e.message); }
@@ -4177,7 +4269,7 @@ CRITICAL: The registration is on the line BELOW the surname. Do NOT return the s
 Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnCard":"registration from line 4 or null"}`
       );
       if (result?.cardNumber || result?.vehicleOnCard) {
-        const matched = fuzzyMatchFleetCard(result.cardNumber, result.vehicleOnCard, learnedDBRef.current);
+        const matched = fuzzyMatchFleetCard(result.cardNumber, result.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
         setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
         showToast(matched._corrected ? "Fleet card scanned (auto-corrected)" : "Fleet card scanned");
       } else {
@@ -4652,7 +4744,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             const cleanCard = (manualReceipt.cardNumber || "").replace(/\s/g, "");
             const cleanRego = (manualReceipt.cardRego || "").trim().toUpperCase();
             if (cleanCard || cleanRego) {
-              const matched = fuzzyMatchFleetCard(cleanCard, cleanRego, learnedDBRef.current);
+              const matched = fuzzyMatchFleetCard(cleanCard, cleanRego, learnedDBRef.current, learnedCardMappingsRef.current);
               setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
               if (cleanCard && cleanRego) learnFleetCardCorrection(cleanCard, cleanRego);
             }
@@ -4730,13 +4822,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                 const cleanCard = v.replace(/\s/g, "");
                 setCardData(d => ({...(d || {}), cardNumber: cleanCard}));
                 const rego = cardData?.vehicleOnCard || otherForm.cardRego;
-                if (rego && cleanCard.length >= 10) learnFleetCardCorrection(cleanCard, rego);
+                if (rego && cleanCard.length >= 10) learnFleetCardCorrection(cleanCard, rego, cardData?._originalCard, cardData?._originalRego);
               }},
               { label: "Card Rego", val: cardData?.vehicleOnCard || otherForm.cardRego || "", set: v => {
                 const cleanRego = v.toUpperCase().replace(/[^A-Z0-9]/g, "");
                 setCardData(d => ({...(d || {}), vehicleOnCard: cleanRego}));
                 const card = cardData?.cardNumber || otherForm.fleetCard;
-                if (card && card.length >= 10 && cleanRego) learnFleetCardCorrection(card, cleanRego);
+                if (card && card.length >= 10 && cleanRego) learnFleetCardCorrection(card, cleanRego, cardData?._originalCard, cardData?._originalRego);
               }},
               { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v})), warn: (() => {
                 if (!receiptData?.date) return null;
@@ -4866,16 +4958,16 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       { label: "Card Number", val: cardData?.cardNumber || regoMatch?.c || "", set: v => {
         const cleanCard = v.replace(/\s/g, "");
         setCardData(d => ({...(d || {}), cardNumber: cleanCard}));
-        // Learn this card ↔ rego association if we have a rego
+        // Learn this card ↔ rego association + raw AI misread mapping
         const rego = cardData?.vehicleOnCard || form.registration;
-        if (rego && cleanCard.length >= 10) learnFleetCardCorrection(cleanCard, rego);
+        if (rego && cleanCard.length >= 10) learnFleetCardCorrection(cleanCard, rego, cardData?._originalCard, cardData?._originalRego);
       }},
       { label: "Card Rego", val: cardData?.vehicleOnCard || "", set: v => {
         const cleanRego = v.toUpperCase().replace(/[^A-Z0-9]/g, "");
         setCardData(d => ({...(d || {}), vehicleOnCard: cleanRego}));
-        // Learn this rego ↔ card association if we have a card number
+        // Learn this rego ↔ card association + raw AI misread mapping
         const card = cardData?.cardNumber;
-        if (card && card.length >= 10 && cleanRego) learnFleetCardCorrection(card, cleanRego);
+        if (card && card.length >= 10 && cleanRego) learnFleetCardCorrection(card, cleanRego, cardData?._originalCard, cardData?._originalRego);
       }},
     ];
     const hasCardData = !!(cardData?.cardNumber || regoMatch?.c);
@@ -4984,9 +5076,12 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               <div style={{ fontSize: 11, fontWeight: 700, color: textColor, letterSpacing: "0.04em", textTransform: "uppercase" }}>
                 {"\uD83D\uDCB3"} Fleet Card Details
                 {isLow && <span style={{ marginLeft: 8, padding: "2px 8px", background: "#dc2626", color: "white", borderRadius: 4, fontSize: 9, fontWeight: 700, letterSpacing: "0.05em" }}>UNSURE</span>}
+                {cardData?._learnedMatch && <span style={{ marginLeft: 8, padding: "2px 8px", background: "#16a34a", color: "white", borderRadius: 4, fontSize: 9, fontWeight: 700, letterSpacing: "0.05em" }}>LEARNED</span>}
               </div>
               <div style={{ fontSize: 11, color: isLow ? "#dc2626" : "#92400e", marginTop: 3, fontWeight: isLow ? 700 : 500 }}>
-                {isLow
+                {cardData?._learnedMatch
+                  ? "\u2705 Auto-corrected using a previously learned correction from a manual edit"
+                  : isLow
                   ? "\u26A0 Low confidence match — the AI could not clearly read this fleet card. Please verify the card number and rego manually."
                   : "\u26A0 Please double-check the card number and rego below — AI scanning can misread embossed card text"}
               </div>
@@ -8001,6 +8096,70 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             </div>
           ))
         )}
+
+        {/* Learned Card Corrections — admin section showing what the system has learned */}
+        {isAdmin && (() => {
+          const mappingEntries = Object.entries(learnedCardMappings);
+          if (mappingEntries.length === 0) return null;
+          return (
+            <div style={{ marginTop: 28 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>{"\uD83E\uDDE0"} Learned Card Corrections</div>
+                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                    The system has learned {mappingEntries.length} correction{mappingEntries.length !== 1 ? "s" : ""} from manual edits. These auto-apply on future scans.
+                  </div>
+                </div>
+                <button onClick={() => setConfirmAction({
+                  message: `Clear all ${mappingEntries.length} learned card corrections? The system will go back to fuzzy matching only.`,
+                  onConfirm: () => { persistCardMappings({}); setConfirmAction(null); showToast("Learned corrections cleared"); }
+                })} style={{
+                  padding: "6px 12px", borderRadius: 6, fontSize: 10, fontWeight: 600,
+                  cursor: "pointer", fontFamily: "inherit", flexShrink: 0,
+                  background: "white", color: "#dc2626", border: "1px solid #fecaca",
+                }}>Clear All</button>
+              </div>
+              <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
+                <table className="data-table">
+                  <thead>
+                    <tr style={{ background: "#fafafa" }}>
+                      <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>AI Misread</th>
+                      <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Corrected To</th>
+                      <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Rego</th>
+                      <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Learned</th>
+                      <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0", width: 40 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mappingEntries.map(([key, m]) => (
+                      <tr key={key}>
+                        <td style={{ color: "#dc2626", fontSize: 11, fontFamily: "monospace" }}>
+                          {m.rawCard ? `...${m.rawCard.slice(-8)}` : m.rawRego || key}
+                        </td>
+                        <td style={{ color: "#16a34a", fontSize: 11, fontFamily: "monospace", fontWeight: 600 }}>
+                          ...{m.correctCard?.slice(-8) || "?"}
+                        </td>
+                        <td style={{ fontWeight: 600, color: "#0f172a", fontSize: 12 }}>{m.correctRego || "\u2014"}</td>
+                        <td style={{ color: "#64748b", fontSize: 10 }}>
+                          {m.learnedAt ? new Date(m.learnedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : "\u2014"}
+                        </td>
+                        <td>
+                          <button onClick={() => {
+                            const { [key]: _, ...rest } = learnedCardMappings;
+                            persistCardMappings(rest);
+                            showToast("Correction removed");
+                          }} title="Remove this correction" style={{
+                            background: "none", border: "none", color: "#cbd5e1", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "2px 4px",
+                          }}>{"\u00D7"}</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   };
