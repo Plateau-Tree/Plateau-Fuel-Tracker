@@ -205,6 +205,34 @@ const db = {
   async saveFleetCardTransactions(txns) {
     await this.saveSetting("fleet_card_transactions", JSON.stringify(txns));
   },
+
+  // Ensure the "receipts" storage bucket exists (creates it if not)
+  async ensureReceiptBucket() {
+    if (!supabase) return false;
+    try {
+      // Try to get the bucket first
+      const { data, error } = await supabase.storage.getBucket("receipts");
+      if (data) return true; // Bucket already exists
+      // If it doesn't exist, create it
+      if (error) {
+        const { error: createError } = await supabase.storage.createBucket("receipts", {
+          public: true,
+          fileSizeLimit: 10485760, // 10MB max per receipt image
+        });
+        if (createError) {
+          // Not critical — app_settings table is used as primary receipt storage
+          console.log("Storage bucket unavailable (using database storage instead)");
+          return false;
+        }
+        console.log("Created 'receipts' storage bucket");
+        return true;
+      }
+    } catch (err) {
+      console.error("ensureReceiptBucket error:", err);
+      return false;
+    }
+    return false;
+  },
 };
 
 // ─── Storage compatibility layer ────────────────────────────────────────────
@@ -2517,68 +2545,118 @@ export default function App() {
   const [reconUploading, setReconUploading] = useState(false);
   const csvInputRef = useRef(null);
 
-  // ── Receipt image storage (Supabase Storage) ──
+  // ── Receipt image compression ──
+  // Compress a base64 image to JPEG at reduced resolution for database storage
+  const compressReceiptImage = (b64, mime) => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        // Max 1200px on longest side — good enough for receipt readability
+        const MAX = 1200;
+        let w = img.width, h = img.height;
+        if (w > MAX || h > MAX) {
+          if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+          else { w = Math.round(w * MAX / h); h = MAX; }
+        }
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        // Compress to JPEG at 0.6 quality — typically yields 80-200KB for a receipt
+        const compressed = canvas.toDataURL("image/jpeg", 0.6);
+        const compressedB64 = compressed.split(",")[1];
+        resolve({ b64: compressedB64, mime: "image/jpeg" });
+      };
+      img.onerror = () => resolve({ b64, mime }); // If compression fails, use original
+      img.src = `data:${mime};base64,${b64}`;
+    });
+  };
+
+  // ── Receipt image storage (Supabase app_settings) ──
   const saveReceiptImage = async (entryId, b64, mime) => {
     try {
-      if (supabase) {
-        // Upload to Supabase Storage bucket "receipts"
-        const ext = mime === "image/png" ? "png" : "jpg";
-        const filePath = `${entryId}.${ext}`;
-        // Convert base64 to Blob
-        const byteChars = atob(b64);
-        const byteArr = new Uint8Array(byteChars.length);
-        for (let i = 0; i < byteChars.length; i++) byteArr[i] = byteChars.charCodeAt(i);
-        const blob = new Blob([byteArr], { type: mime });
+      // Compress the image first to keep DB storage manageable
+      const compressed = await compressReceiptImage(b64, mime);
+      const imgData = JSON.stringify({ b64: compressed.b64, mime: compressed.mime });
 
-        const { error } = await supabase.storage.from("receipts").upload(filePath, blob, {
-          contentType: mime, upsert: true,
-        });
-        if (error) {
-          console.error("Storage upload error:", error);
-          // Fallback to localStorage
-          await window.storage.set(`fuel_receipt_img_${entryId}`, JSON.stringify({ b64, mime }));
-          return;
+      if (supabase) {
+        // Primary: save to Supabase app_settings table (reliable, no bucket needed)
+        await db.saveSetting(`receipt_img_${entryId}`, imgData);
+        // Mark entry as having a receipt
+        const entry = entriesRef.current.find(e => e.id === entryId);
+        if (entry) {
+          entry.hasReceipt = true;
+          entry.receiptUrl = `__db__${entryId}`;
+          db.saveEntry(entry).catch(() => {});
         }
-        // Get public URL and store it on the entry
-        const { data: urlData } = supabase.storage.from("receipts").getPublicUrl(filePath);
-        if (urlData?.publicUrl) {
-          // Save URL to the entry's metadata
-          const entry = entriesRef.current.find(e => e.id === entryId);
-          if (entry) {
-            entry.receiptUrl = urlData.publicUrl;
-            entry.hasReceipt = true;
-            db.saveEntry(entry).catch(() => {});
-          }
-        }
+        setEntries(prev => prev.map(e => e.id === entryId
+          ? { ...e, hasReceipt: true, receiptUrl: `__db__${entryId}` }
+          : e
+        ));
+        console.log("Receipt image saved to database for entry:", entryId);
       } else {
         // No Supabase — fallback to localStorage
-        await window.storage.set(`fuel_receipt_img_${entryId}`, JSON.stringify({ b64, mime }));
+        await window.storage.set(`fuel_receipt_img_${entryId}`, imgData);
       }
     } catch (err) {
       console.error("saveReceiptImage error:", err);
-      // Fallback to localStorage
-      try { await window.storage.set(`fuel_receipt_img_${entryId}`, JSON.stringify({ b64, mime })); } catch (_) {}
+      showToast("Receipt image could not be saved — trying local backup", "warn");
+      // Final fallback: localStorage
+      try {
+        const compressed = await compressReceiptImage(b64, mime);
+        await window.storage.set(`fuel_receipt_img_${entryId}`, JSON.stringify(compressed));
+      } catch (_) {}
     }
   };
 
   const loadReceiptImage = async (entryId) => {
     try {
-      // First check if entry has a Supabase URL
       const entry = entriesRef.current.find(e => e.id === entryId);
-      if (entry?.receiptUrl) {
+      // Check for database-stored receipt
+      if (entry?.receiptUrl?.startsWith("__db__") || entry?.receiptUrl?.startsWith("__db_fallback__")) {
+        const raw = await db.loadSetting(`receipt_img_${entryId}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          return { url: `data:${parsed.mime};base64,${parsed.b64}` };
+        }
+      }
+      // Check for Supabase Storage URL (legacy / if bucket exists)
+      if (entry?.receiptUrl && !entry.receiptUrl.startsWith("__db")) {
         return { url: entry.receiptUrl };
       }
-      // Fallback: try localStorage
+      // Try loading from database even if receiptUrl isn't set (entry may have hasReceipt=true)
+      if (supabase) {
+        const raw = await db.loadSetting(`receipt_img_${entryId}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          // Backfill the receiptUrl so next load is faster
+          if (entry) {
+            entry.receiptUrl = `__db__${entryId}`;
+            entry.hasReceipt = true;
+            db.saveEntry(entry).catch(() => {});
+          }
+          return { url: `data:${parsed.mime};base64,${parsed.b64}` };
+        }
+      }
+      // Final fallback: try localStorage
       const res = await window.storage.get(`fuel_receipt_img_${entryId}`);
-      return res?.value ? JSON.parse(res.value) : null;
+      if (res?.value) {
+        const parsed = JSON.parse(res.value);
+        if (parsed.b64) return { url: `data:${parsed.mime};base64,${parsed.b64}` };
+        return parsed;
+      }
+      return null;
     } catch (_) { return null; }
   };
 
   const deleteReceiptImage = async (entryId) => {
     try {
       if (supabase) {
-        // Try to delete from Supabase Storage (both jpg and png)
-        await supabase.storage.from("receipts").remove([`${entryId}.jpg`, `${entryId}.png`]);
+        // Delete from app_settings
+        await db.saveSetting(`receipt_img_${entryId}`, null);
+        // Also try Supabase Storage (legacy)
+        await supabase.storage.from("receipts").remove([`${entryId}.jpg`, `${entryId}.png`]).catch(() => {});
       }
       // Also clean up localStorage fallback
       await window.storage.delete(`fuel_receipt_img_${entryId}`);
