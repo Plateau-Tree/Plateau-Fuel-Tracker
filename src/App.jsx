@@ -1381,7 +1381,8 @@ function sortEntries(a, b) {
 
 // ─── Excel Export ───────────────────────────────────────────────────────────
 function exportVehicleType(entries, vehicleType, serviceData) {
-  const filtered = entries.filter(e => e.vehicleType === vehicleType);
+  const vt = vehicleType || "Other";
+  const filtered = entries.filter(e => (e.vehicleType || "Other") === vt);
   if (!filtered.length) { alert(`No ${vehicleType} entries to export.`); return; }
 
   const wb = XLSX.utils.book_new();
@@ -1457,7 +1458,7 @@ function exportVehicleType(entries, vehicleType, serviceData) {
     XLSX.utils.book_append_sheet(wb, ws, rego.slice(0, 31));
   });
 
-  XLSX.writeFile(wb, `Fuel_${vehicleType}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  XLSX.writeFile(wb, `Fuel_${vt}_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 // ─── Fleet Card Monthly Summary Export ──────────────────────────────────────
@@ -5599,14 +5600,14 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         </div>
 
         {/* Export by division */}
-        {entries.length > 0 && (
+        {vehicleEntries.length > 0 && (
           <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: "14px 16px", marginBottom: 20 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 10 }}>Export to Excel</div>
             {DIVISION_KEYS.map(dk => {
               const dc = DIVISIONS[dk].color;
-              const divEntries = entries.filter(e => (e.division || getDivision(e.vehicleType)) === dk);
+              const divEntries = vehicleEntries.filter(e => (e.division || getDivision(e.vehicleType)) === dk);
               if (!divEntries.length) return null;
-              const divTypes = [...new Set(divEntries.map(e => e.vehicleType))];
+              const divTypes = [...new Set(divEntries.map(e => e.vehicleType || "Other"))].filter(Boolean).sort();
               return (
                 <div key={dk} style={{ marginBottom: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: dc.text, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
@@ -5628,8 +5629,8 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             })}
             <button onClick={() => {
               DIVISION_KEYS.forEach(dk => {
-                const divEntries = entries.filter(e => (e.division || getDivision(e.vehicleType)) === dk);
-                [...new Set(divEntries.map(e => e.vehicleType))].forEach(t => exportVehicleType(divEntries, t, serviceData));
+                const divEntries = vehicleEntries.filter(e => (e.division || getDivision(e.vehicleType)) === dk);
+                [...new Set(divEntries.map(e => e.vehicleType || "Other"))].filter(Boolean).forEach(t => exportVehicleType(divEntries, t, serviceData));
               });
             }} style={{ padding: "7px 12px", borderRadius: 7, fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, background: "#f8fafc", color: "#374151", border: "1px solid #e2e8f0", marginTop: 6 }}>
               {"\u2193"} Export All
