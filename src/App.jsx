@@ -5031,6 +5031,48 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       return { ...sp, _matchedLine: null, _matchedItem: null, _isFuelOther: false };
     });
 
+    // ── Detect unmatched receipt items ──
+    // In split mode: availableLinesForReview already had primary + split matches spliced out
+    // In non-split mode: primary vehicle uses 1 line, rest are unmatched
+    const unmatchedFuelLines = splitMode
+      ? [...availableLinesForReview]
+      : scannedLines.slice(1); // primary vehicle accounts for line 0
+    // For other items: count how many "other" splits exist for non-fuel items
+    const otherSplitCount = splits.filter(sp => sp.splitType === "other" && !FUEL_EQUIPMENT_RE.test(sp.equipment)).length;
+    const unmatchedOtherItems = scannedOtherItems.length > otherSplitCount
+      ? scannedOtherItems.slice(otherSplitCount) : [];
+    const hasUnmatched = unmatchedFuelLines.length > 0 || unmatchedOtherItems.length > 0;
+
+    // Auto-create splits for unmatched items
+    const autoAddUnmatched = () => {
+      if (!splitMode) setSplitMode(true);
+      const newSplits = [];
+      unmatchedFuelLines.forEach(line => {
+        newSplits.push({
+          id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
+          splitType: "vehicle", rego: "", odometer: "",
+          litres: line.litres?.toString() || "",
+          ppl: line.pricePerLitre?.toString() || "",
+          division: "", vehicleType: "", _match: null,
+          equipment: "", fleetCard: "", cardRego: "", notes: "",
+          _autoFuelType: line.fuelType || "",
+        });
+      });
+      unmatchedOtherItems.forEach(item => {
+        newSplits.push({
+          id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
+          splitType: "other", rego: "", odometer: "",
+          litres: item.litres?.toString() || "",
+          ppl: item.pricePerLitre?.toString() || "",
+          division: "", vehicleType: "", _match: null,
+          equipment: item.description || "Other",
+          fleetCard: "", cardRego: "", notes: "",
+        });
+      });
+      setSplits(prev => [...prev, ...newSplits]);
+      showToast(`Added ${newSplits.length} entr${newSplits.length === 1 ? "y" : "ies"} from receipt`);
+    };
+
     return (
       <div className="fade-in">
         <div style={{ marginBottom: 16 }}>
@@ -5039,6 +5081,62 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             {splitMode ? `Split receipt \u2014 ${1 + splits.length} items \u00B7 ` : ""}Tap any value to edit
           </div>
         </div>
+
+        {/* Unmatched receipt items warning */}
+        {hasUnmatched && (
+          <div style={{
+            background: "#fffbeb", border: "2px solid #fbbf24", borderRadius: 10,
+            padding: "12px 14px", marginBottom: 16,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#92400e", marginBottom: 6 }}>
+              {"\u26A0"} Receipt has items you haven't added yet
+            </div>
+            <div style={{ fontSize: 12, color: "#78350f", marginBottom: 10 }}>
+              The scanned receipt shows {unmatchedFuelLines.length > 0 && (
+                <strong>{unmatchedFuelLines.length} extra fuel line{unmatchedFuelLines.length !== 1 ? "s" : ""}</strong>
+              )}
+              {unmatchedFuelLines.length > 0 && unmatchedOtherItems.length > 0 && " and "}
+              {unmatchedOtherItems.length > 0 && (
+                <strong>{unmatchedOtherItems.length} other item{unmatchedOtherItems.length !== 1 ? "s" : ""}</strong>
+              )}
+              {" "}that {unmatchedFuelLines.length + unmatchedOtherItems.length === 1 ? "isn't" : "aren't"} assigned to any entry.
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+              {unmatchedFuelLines.map((line, i) => (
+                <div key={`uf-${i}`} style={{
+                  background: "white", border: "1px solid #fbbf24", borderRadius: 6,
+                  padding: "5px 10px", fontSize: 11,
+                }}>
+                  <span style={{ fontWeight: 700, color: "#92400e" }}>{"\u26FD"} {line.fuelType || "Fuel"}</span>
+                  {line.litres != null && <span style={{ color: "#78350f" }}> {line.litres}L</span>}
+                  {line.cost != null && <span style={{ color: "#78350f" }}> ${line.cost.toFixed(2)}</span>}
+                </div>
+              ))}
+              {unmatchedOtherItems.map((item, i) => (
+                <div key={`uo-${i}`} style={{
+                  background: "white", border: "1px solid #fbbf24", borderRadius: 6,
+                  padding: "5px 10px", fontSize: 11,
+                }}>
+                  <span style={{ fontWeight: 700, color: "#1e40af" }}>{"\uD83D\uDEE2"} {item.description || "Other"}</span>
+                  {item.litres != null && <span style={{ color: "#78350f" }}> {item.litres}L</span>}
+                  {item.cost != null && <span style={{ color: "#78350f" }}> ${item.cost.toFixed(2)}</span>}
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={autoAddUnmatched} style={{
+                padding: "8px 14px", borderRadius: 7, fontSize: 12, fontWeight: 700,
+                cursor: "pointer", fontFamily: "inherit",
+                background: "#f59e0b", color: "white", border: "none",
+              }}>Add {unmatchedFuelLines.length + unmatchedOtherItems.length} entr{unmatchedFuelLines.length + unmatchedOtherItems.length === 1 ? "y" : "ies"} automatically</button>
+              <button onClick={() => setStep(2)} style={{
+                padding: "8px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600,
+                cursor: "pointer", fontFamily: "inherit",
+                background: "white", color: "#92400e", border: "1px solid #fbbf24",
+              }}>{"\u2190"} Go back & add manually</button>
+            </div>
+          </div>
+        )}
 
         {splitMode && (
           <div style={{ fontSize: 12, fontWeight: 700, color: "#15803d", marginBottom: 6 }}>Vehicle 1 (primary)</div>
