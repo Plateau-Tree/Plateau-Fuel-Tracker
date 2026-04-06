@@ -284,21 +284,30 @@ const VT_COLORS = {
 };
 
 const SERVICE_INTERVAL_KM = 10000;
+const SERVICE_INTERVAL_HRS = 500; // Hours-based service interval for plant/equipment
 const SERVICE_WARNING_KM = 2000; // Warn at 8000km (10000 - 2000)
+const SERVICE_WARNING_HRS = 50;  // Warn at 450hrs (500 - 50)
 
-// Typical fuel efficiency ranges (L/km) for flagging
+// Vehicle types that track hours instead of km
+const HOURS_BASED_TYPES = new Set(["Excavator", "Stump Grinder", "Mower", "Landscape Tractor"]);
+const isHoursBased = (vehicleType) => HOURS_BASED_TYPES.has(vehicleType);
+const odoUnit = (vehicleType) => isHoursBased(vehicleType) ? "hrs" : "km";
+const serviceInterval = (vehicleType) => isHoursBased(vehicleType) ? SERVICE_INTERVAL_HRS : SERVICE_INTERVAL_KM;
+const serviceWarning = (vehicleType) => isHoursBased(vehicleType) ? SERVICE_WARNING_HRS : SERVICE_WARNING_KM;
+
+// Typical fuel efficiency ranges — L/km for road vehicles, L/hr for hours-based equipment
 const EFFICIENCY_RANGES = {
-  Ute: { low: 0.06, high: 0.18 },
-  Truck: { low: 0.10, high: 0.45 },
-  Excavator: { low: 0.05, high: 0.50 },
-  EWP: { low: 0.05, high: 0.30 },
-  Chipper: { low: 0.04, high: 0.30 },
-  "Stump Grinder": { low: 0.03, high: 0.25 },
-  Trailer: { low: 0.06, high: 0.20 },
-  "Hired Vehicle": { low: 0.04, high: 0.30 },
-  Mower: { low: 0.02, high: 0.15 },
-  "Landscape Tractor": { low: 0.05, high: 0.35 },
-  Other: { low: 0.04, high: 0.40 },
+  Ute: { low: 0.06, high: 0.18, unit: "L/km" },
+  Truck: { low: 0.10, high: 0.45, unit: "L/km" },
+  Excavator: { low: 4, high: 25, unit: "L/hr" },
+  EWP: { low: 0.05, high: 0.30, unit: "L/km" },
+  Chipper: { low: 0.04, high: 0.30, unit: "L/km" },
+  "Stump Grinder": { low: 3, high: 15, unit: "L/hr" },
+  Trailer: { low: 0.06, high: 0.20, unit: "L/km" },
+  "Hired Vehicle": { low: 0.04, high: 0.30, unit: "L/km" },
+  Mower: { low: 2, high: 12, unit: "L/hr" },
+  "Landscape Tractor": { low: 4, high: 20, unit: "L/hr" },
+  Other: { low: 0.04, high: 0.40, unit: "L/km" },
 };
 
 // Helper to get division for a vehicle type
@@ -1409,28 +1418,32 @@ function exportVehicleType(entries, vehicleType, serviceData) {
       const calcCost = litres && ppl ? litres * ppl : "";
       const moreLess = totalCost && calcCost ? totalCost - calcCost : "";
 
+      const hrsMode = isHoursBased(e.vehicleType);
+      const uLabel = hrsMode ? "Hours" : "KM";
+      const effLabel = hrsMode ? "L/hr" : "L/km";
+      const effDecimals = hrsMode ? 1 : 4;
       return {
         "Division": e.division || getDivision(e.vehicleType) || "",
         "Registration": e.registration || "",
         "Date": e.date || "",
         "Driver": e.driverName || "",
-        "Odometer Start": odoStart,
-        "Odometer Finish": odoFinish,
-        "KM Travelled": kmTravelled,
+        [`${uLabel} Start`]: odoStart,
+        [`${uLabel} Finish`]: odoFinish,
+        [`${uLabel} Travelled`]: kmTravelled,
         "Fuel (Litres)": litres,
         "Price per Litre ($)": ppl,
         "Total Fuel Cost ($)": totalCost,
         "": "",
-        "L/km": lPerKm ? parseFloat(lPerKm.toFixed(4)) : "",
-        "KM Travelled (calc)": kmTravelled,
+        [effLabel]: lPerKm ? parseFloat(lPerKm.toFixed(effDecimals)) : "",
+        [`${uLabel} Travelled (calc)`]: kmTravelled,
         "Total Litres": litres,
         "Cost of Petrol ($/L)": ppl,
         "Calc Fuel Cost ($)": calcCost ? parseFloat(calcCost.toFixed(2)) : "",
         "More/Less ($)": moreLess ? parseFloat(moreLess.toFixed(2)) : "",
         " ": "",
         "Last Service Date": svc.lastServiceDate || "",
-        "Last Service (kms)": svc.lastServiceKms || "",
-        "Next Service Due": svc.lastServiceKms ? svc.lastServiceKms + SERVICE_INTERVAL_KM : "",
+        [`Last Service (${hrsMode ? "hrs" : "kms"})`]: svc.lastServiceKms || "",
+        "Next Service Due": svc.lastServiceKms ? svc.lastServiceKms + serviceInterval(e.vehicleType) : "",
         "Station": e.station || "",
         "Fleet Card No.": e.fleetCardNumber || "",
       };
@@ -2026,7 +2039,7 @@ function ManualEntryModal({ rego, division, vehicleType, onSave, onClose }) {
 
         <FieldInput label="Driver Name" value={f.driverName} onChange={v => set("driverName", v)} placeholder="Who fuelled this vehicle" required />
         <FieldInput label="Date" value={f.date} onChange={v => set("date", v)} placeholder="DD/MM/YYYY" required />
-        <FieldInput label="Odometer" value={f.odometer} onChange={v => set("odometer", v)} placeholder="e.g. 154597" type="number" required />
+        <FieldInput label={isHoursBased(vehicleType) ? "Hour Meter" : "Odometer"} value={f.odometer} onChange={v => set("odometer", v)} placeholder={isHoursBased(vehicleType) ? "e.g. 4500" : "e.g. 154597"} type="number" required />
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <FieldInput label="Litres" value={f.litres} onChange={v => set("litres", v)} placeholder="e.g. 65.86" type="number" />
@@ -2106,7 +2119,7 @@ function EditEntryModal({ entry, onSave, onDelete, onClose }) {
 
         <FieldInput label="Driver Name" value={f.driverName} onChange={v => set("driverName", v)} placeholder="Driver name" required />
         <FieldInput label="Date" value={f.date} onChange={v => set("date", v)} placeholder="DD/MM/YYYY" required />
-        <FieldInput label="Odometer" value={f.odometer} onChange={v => set("odometer", v)} placeholder="e.g. 154597" type="number" required />
+        <FieldInput label={isHoursBased(entry.vehicleType) ? "Hour Meter" : "Odometer"} value={f.odometer} onChange={v => set("odometer", v)} placeholder={isHoursBased(entry.vehicleType) ? "e.g. 4500" : "e.g. 154597"} type="number" required />
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <FieldInput label="Litres" value={f.litres} onChange={v => set("litres", v)} placeholder="e.g. 65.86" type="number" />
@@ -2230,7 +2243,7 @@ const SERVICE_RECORD_TYPES = [
   { value: "note", label: "\uD83D\uDCDD Note", color: "#64748b" },
 ];
 
-function ServiceModal({ rego, current, onSave, onClose }) {
+function ServiceModal({ rego, current, onSave, onClose, vehicleType: vtProp }) {
   const data = migrateServiceData(current);
   const [records, setRecords] = useState(data.records || []);
   const [addMode, setAddMode] = useState(false);
@@ -2298,8 +2311,8 @@ function ServiceModal({ rego, current, onSave, onClose }) {
             <div style={{ fontWeight: 700, color: "#15803d", fontSize: 11, marginBottom: 4 }}>Latest Service</div>
             <div style={{ display: "flex", gap: 16 }}>
               <span><span style={{ color: "#64748b" }}>Date:</span> <strong>{latest.lastServiceDate}</strong></span>
-              <span><span style={{ color: "#64748b" }}>Odometer:</span> <strong>{latest.lastServiceKms?.toLocaleString()} km</strong></span>
-              <span><span style={{ color: "#64748b" }}>Next due:</span> <strong>{(latest.lastServiceKms + SERVICE_INTERVAL_KM).toLocaleString()} km</strong></span>
+              <span><span style={{ color: "#64748b" }}>{isHoursBased(vtProp) ? "Hours:" : "Odometer:"}</span> <strong>{latest.lastServiceKms?.toLocaleString()} {odoUnit(vtProp)}</strong></span>
+              <span><span style={{ color: "#64748b" }}>Next due:</span> <strong>{(latest.lastServiceKms + serviceInterval(vtProp)).toLocaleString()} {odoUnit(vtProp)}</strong></span>
             </div>
           </div>
         )}
@@ -2334,7 +2347,7 @@ function ServiceModal({ rego, current, onSave, onClose }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <FieldInput label="Date" value={newDate} onChange={setNewDate} placeholder="DD/MM/YYYY" required />
               {(newType === "service" || newType === "mechanical") && (
-                <FieldInput label="Odometer (km)" value={newKms} onChange={setNewKms} placeholder="e.g. 154000" type="number" />
+                <FieldInput label={isHoursBased(vtProp) ? "Hour Meter" : "Odometer (km)"} value={newKms} onChange={setNewKms} placeholder={isHoursBased(vtProp) ? "e.g. 4500" : "e.g. 154000"} type="number" />
               )}
             </div>
             <FieldInput label="Description" value={newDesc} onChange={setNewDesc} placeholder={
@@ -2380,7 +2393,7 @@ function ServiceModal({ rego, current, onSave, onClose }) {
                   </div>
                   <div style={{ display: "flex", gap: 12, fontSize: 10, color: "#64748b", marginTop: 6, flexWrap: "wrap" }}>
                     {rec.date && <span>{"\uD83D\uDCC5"} {rec.date}</span>}
-                    {rec.kms && <span>{"\uD83D\uDCCF"} {rec.kms.toLocaleString()} km</span>}
+                    {rec.kms && <span>{"\uD83D\uDCCF"} {rec.kms.toLocaleString()} {odoUnit(vtProp)}</span>}
                     {rec.addedBy && <span>{"\uD83D\uDC64"} {rec.addedBy}</span>}
                   </div>
                 </div>
@@ -2452,23 +2465,27 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
   // These appear in the DASHBOARD for admin resolution
   // ══════════════════════════════════════════════════════════════════════════
 
+  const hrsMode = isHoursBased(vehicleType);
+  const unit = hrsMode ? "hrs" : "km";
   let kmTravelled = null;
   if (prevOdo != null && odo != null) {
     kmTravelled = odo - prevOdo;
     if (kmTravelled < 0) {
-      flags.push({ category: "ops", type: "danger", text: "Odo went backwards", detail: `${prevOdo.toLocaleString()} \u2192 ${odo.toLocaleString()}` });
+      flags.push({ category: "ops", type: "danger", text: `${hrsMode ? "Hours" : "Odo"} went backwards`, detail: `${prevOdo.toLocaleString()} \u2192 ${odo.toLocaleString()} ${unit}` });
     } else if (kmTravelled === 0) {
-      flags.push({ category: "ops", type: "warn", text: "No km travelled", detail: "Odometer unchanged since last entry" });
+      flags.push({ category: "ops", type: "warn", text: `No ${unit} recorded`, detail: `${hrsMode ? "Hours" : "Odometer"} unchanged since last entry` });
     }
   }
 
   if (kmTravelled > 0 && litres > 0) {
-    const lPerKm = litres / kmTravelled;
+    const efficiency = litres / kmTravelled; // L/km or L/hr depending on type
     const range = EFFICIENCY_RANGES[vehicleType] || EFFICIENCY_RANGES.Other;
-    if (lPerKm > range.high) {
-      flags.push({ category: "ops", type: "warn", text: "High fuel usage", detail: `${lPerKm.toFixed(3)} L/km \u2014 above expected for ${vehicleType}` });
-    } else if (lPerKm < range.low) {
-      flags.push({ category: "ops", type: "info", text: "Low fuel usage", detail: `${lPerKm.toFixed(3)} L/km \u2014 below expected` });
+    const effUnit = hrsMode ? "L/hr" : "L/km";
+    const decimals = hrsMode ? 1 : 3;
+    if (efficiency > range.high) {
+      flags.push({ category: "ops", type: "warn", text: "High fuel usage", detail: `${efficiency.toFixed(decimals)} ${effUnit} \u2014 above expected for ${vehicleType}` });
+    } else if (efficiency < range.low) {
+      flags.push({ category: "ops", type: "info", text: "Low fuel usage", detail: `${efficiency.toFixed(decimals)} ${effUnit} \u2014 below expected` });
     }
   }
 
@@ -2487,13 +2504,15 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
   if (svcData) {
     const latestSvc = getLatestService(svcData);
     if (latestSvc?.lastServiceKms && odo) {
-      const nextDue = latestSvc.lastServiceKms + SERVICE_INTERVAL_KM;
-      const kmSince = odo - latestSvc.lastServiceKms;
-      const kmRemaining = nextDue - odo;
+      const svcInt = serviceInterval(vehicleType);
+      const svcWarn = serviceWarning(vehicleType);
+      const nextDue = latestSvc.lastServiceKms + svcInt;
+      const since = odo - latestSvc.lastServiceKms;
+      const remaining = nextDue - odo;
       if (odo >= nextDue) {
-        flags.push({ category: "ops", type: "danger", text: "SERVICE OVERDUE", detail: `${kmSince.toLocaleString()} km since service \u2014 due at ${nextDue.toLocaleString()} km` });
-      } else if (kmRemaining <= SERVICE_WARNING_KM) {
-        flags.push({ category: "ops", type: "warn", text: `Service in ${kmRemaining.toLocaleString()} km`, detail: `${kmSince.toLocaleString()} km since service \u2014 due at ${nextDue.toLocaleString()} km` });
+        flags.push({ category: "ops", type: "danger", text: "SERVICE OVERDUE", detail: `${since.toLocaleString()} ${unit} since service \u2014 due at ${nextDue.toLocaleString()} ${unit}` });
+      } else if (remaining <= svcWarn) {
+        flags.push({ category: "ops", type: "warn", text: `Service in ${remaining.toLocaleString()} ${unit}`, detail: `${since.toLocaleString()} ${unit} since service \u2014 due at ${nextDue.toLocaleString()} ${unit}` });
       }
     }
   }
@@ -2967,9 +2986,12 @@ export default function App() {
     if (!odo || !form.registration) return null;
     const lastOdo = getLastOdometer(form.registration);
     if (!lastOdo) return null;
-    if (odo < lastOdo) return { type: "danger", text: `Odometer is lower than last recorded (${lastOdo.toLocaleString()} km). Did you miss a digit?` };
+    const hrsMode = isHoursBased(form.vehicleType);
+    const u = hrsMode ? "hrs" : "km";
+    if (odo < lastOdo) return { type: "danger", text: `${hrsMode ? "Hours" : "Odometer"} is lower than last recorded (${lastOdo.toLocaleString()} ${u}). Did you miss a digit?` };
     const jump = odo - lastOdo;
-    if (jump > 30000) return { type: "warn", text: `That's ${jump.toLocaleString()} km since last fill-up \u2014 unusually high. Double-check the reading.` };
+    const jumpThreshold = hrsMode ? 5000 : 30000;
+    if (jump > jumpThreshold) return { type: "warn", text: `That's ${jump.toLocaleString()} ${u} since last fill-up \u2014 unusually high. Double-check the reading.` };
     return null;
   };
 
@@ -3805,8 +3827,8 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 8 }}>
                         <div>
-                          <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Odometer</label>
-                          <input value={sp.odometer} onChange={e => updateSplit(sp.id, "odometer", e.target.value)} placeholder="e.g. 23140" type="number"
+                          <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>{isHoursBased(sp.vehicleType) ? "Hour Meter" : "Odometer"}</label>
+                          <input value={sp.odometer} onChange={e => updateSplit(sp.id, "odometer", e.target.value)} placeholder={isHoursBased(sp.vehicleType) ? "e.g. 4500" : "e.g. 23140"} type="number"
                             style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
                             onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
                         </div>
@@ -4032,12 +4054,12 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
 
         <div style={{ display: "grid", gridTemplateColumns: splitMode ? "1fr 1fr" : "1fr", gap: 10 }}>
           <div style={{ marginBottom: 14 }}>
-            <label style={{ display: "block", fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 5, textAlign: splitMode ? "left" : "center" }}>
-              Odometer / Hours Reading<span style={{ color: "#ef4444", marginLeft: 2 }}>*</span>
+            <label style={{ display: "block", fontSize: 12, color: "#374141", fontWeight: 600, marginBottom: 5, textAlign: splitMode ? "left" : "center" }}>
+              {isHoursBased(form.vehicleType) ? "Hour Meter Reading" : "Odometer Reading"}<span style={{ color: "#ef4444", marginLeft: 2 }}>*</span>
             </label>
             <input
               type="number" value={form.odometer} onChange={e => setForm(f => ({ ...f, odometer: e.target.value }))}
-              placeholder={(() => { const last = getLastOdometer(form.registration); return last ? `Last: ${last.toLocaleString()} km` : "e.g. 4340"; })()}
+              placeholder={(() => { const last = getLastOdometer(form.registration); const u = isHoursBased(form.vehicleType) ? "hrs" : "km"; return last ? `Last: ${last.toLocaleString()} ${u}` : isHoursBased(form.vehicleType) ? "e.g. 1250" : "e.g. 4340"; })()}
               inputMode="decimal"
               style={{
                 width: "100%", background: "white", border: `1px solid ${getOdoWarning()?.type === "danger" ? "#fca5a5" : getOdoWarning()?.type === "warn" ? "#fcd34d" : "#e2e8f0"}`,
@@ -4052,7 +4074,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
               const warn = getOdoWarning();
               return (
                 <>
-                  {last && !warn && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>Last recorded: <strong>{last.toLocaleString()} km</strong></div>}
+                  {last && !warn && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>Last recorded: <strong>{last.toLocaleString()} {isHoursBased(form.vehicleType) ? "hrs" : "km"}</strong></div>}
                   {warn && (
                     <div style={{ fontSize: 11, marginTop: 4, padding: "5px 8px", borderRadius: 5,
                       background: warn.type === "danger" ? "#fef2f2" : "#fffbeb",
@@ -4163,8 +4185,8 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
                   )}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                     <div>
-                      <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Odometer</label>
-                      <input value={sp.odometer} onChange={e => updateSplit(sp.id, "odometer", e.target.value)} placeholder="Reading" type="number" inputMode="decimal"
+                      <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>{isHoursBased(sp.vehicleType) ? "Hour Meter" : "Odometer"}</label>
+                      <input value={sp.odometer} onChange={e => updateSplit(sp.id, "odometer", e.target.value)} placeholder={isHoursBased(sp.vehicleType) ? "e.g. 4500" : "Reading"} type="number" inputMode="decimal"
                         style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
                         onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
                     </div>
@@ -4584,7 +4606,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           padding: "8px 12px", marginTop: 8, fontSize: 12,
         }}>
           <span style={{ fontWeight: 700, color: "#15803d", fontSize: 11 }}>{"\uD83D\uDCCF"} Odometer detected:</span>{" "}
-          <span style={{ fontWeight: 600, color: "#0f172a" }}>{receiptData.odometer.toLocaleString()} km</span>
+          <span style={{ fontWeight: 600, color: "#0f172a" }}>{receiptData.odometer.toLocaleString()} {isHoursBased(form.vehicleType) ? "hrs" : "km"}</span>
         </div>
       )}
 
@@ -4940,7 +4962,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       { label: "Registration", val: form.registration, set: v => setForm(f => ({...f, registration: v.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6)})) },
       { label: "Division", val: form.division, set: v => setForm(f => ({...f, division: v})) },
       { label: "Vehicle type", val: form.vehicleType, set: v => setForm(f => ({...f, vehicleType: v})) },
-      { label: "Odometer", val: form.odometer, set: v => setForm(f => ({...f, odometer: v})) },
+      { label: isHoursBased(form.vehicleType) ? "Hour Meter" : "Odometer", val: form.odometer, set: v => setForm(f => ({...f, odometer: v})) },
       { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v})), warn: (() => {
         if (!receiptData?.date) return null;
         const ts = parseDate(receiptData.date); if (!ts) return null;
@@ -5261,7 +5283,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               { label: "Registration", val: sp.rego, set: v => updateSplit(sp.id, "rego", v.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6)) },
               { label: "Vehicle", val: sp._vehicleOverride || spMatch?.n || spMatch?.t || "\u2014", set: v => updateSplit(sp.id, "_vehicleOverride", v) },
               { label: "Fuel type", val: sp._fuelTypeOverride || ml?.fuelType || "", set: v => updateSplit(sp.id, "_fuelTypeOverride", v) },
-              { label: "Odometer", val: sp.odometer, set: v => updateSplit(sp.id, "odometer", v) },
+              { label: isHoursBased(sp.vehicleType) ? "Hour Meter" : "Odometer", val: sp.odometer, set: v => updateSplit(sp.id, "odometer", v) },
               { label: "Litres", val: spDisplayLitres, set: v => updateSplit(sp.id, "litres", v) },
               { label: "$/L", val: sp._pplOverride || spPpl?.toString() || "", set: v => updateSplit(sp.id, "_pplOverride", v) },
               { label: "Cost", val: sp._costOverride || spCalcCost, set: v => updateSplit(sp.id, "_costOverride", v) },
@@ -5346,7 +5368,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             {fuelType && <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 500, background: "#f8fafc", color: "#374151", border: "1px solid #e2e8f0" }}>{fuelType}</span>}
             {!otherMode && form.division && <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 500, background: form.division === "Tree" ? "#f0fdf4" : "#faf5ff", color: form.division === "Tree" ? "#15803d" : "#7c3aed", border: `1px solid ${form.division === "Tree" ? "#86efac" : "#c4b5fd"}` }}>{form.division}</span>}
             {!otherMode && form.vehicleType && <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 500, background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0" }}>{form.vehicleType}</span>}
-            {!otherMode && form.odometer && <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 500, background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0" }}>{parseFloat(form.odometer).toLocaleString()} km</span>}
+            {!otherMode && form.odometer && <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 500, background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0" }}>{parseFloat(form.odometer).toLocaleString()} {isHoursBased(form.vehicleType) ? "hrs" : "km"}</span>}
             {station && <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 500, background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0" }}>{station}</span>}
           </div>
 
@@ -5777,9 +5799,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                       const isExpanded = expandedRego === rego;
                       const svc = getLatestService(serviceData[rego]);
                       const latestOdo = sorted[sorted.length - 1]?.odometer;
-                      const nextServiceDue = svc?.lastServiceKms ? svc.lastServiceKms + SERVICE_INTERVAL_KM : null;
+                      const svcInt = serviceInterval(vt);
+                      const svcWarn = serviceWarning(vt);
+                      const nextServiceDue = svc?.lastServiceKms ? svc.lastServiceKms + svcInt : null;
                       const isOverdue = nextServiceDue && latestOdo && latestOdo >= nextServiceDue;
-                      const isServiceSoon = nextServiceDue && latestOdo && !isOverdue && (nextServiceDue - latestOdo) <= SERVICE_WARNING_KM;
+                      const isServiceSoon = nextServiceDue && latestOdo && !isOverdue && (nextServiceDue - latestOdo) <= svcWarn;
 
                       // Collect flags
                       const vehicleFlags = [];
@@ -5828,11 +5852,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                             <div style={{ display: "flex", gap: 16, fontSize: 11, color: "#64748b", flexWrap: "wrap" }}>
                               <span>{sorted.length} fill-ups</span>
                               {vehicleTotalLitres > 0 && <span>{vehicleTotalLitres.toFixed(1)}L total</span>}
-                              {latestOdo && <span>Odo: {latestOdo.toLocaleString()} km</span>}
+                              {latestOdo && <span>{isHoursBased(vt) ? "Hours" : "Odo"}: {latestOdo.toLocaleString()} {isHoursBased(vt) ? "hrs" : "km"}</span>}
                               {svc?.lastServiceDate && <span>Last svc: {svc.lastServiceDate}</span>}
                               {nextServiceDue && (
                                 <span style={{ color: showOverdueHighlight ? "#dc2626" : isServiceSoon ? "#b45309" : "#64748b", fontWeight: showOverdueHighlight ? 700 : 400 }}>
-                                  {showOverdueHighlight ? `SERVICE OVERDUE (due ${nextServiceDue.toLocaleString()})` : `Next svc: ${nextServiceDue.toLocaleString()} km`}
+                                  {showOverdueHighlight ? `SERVICE OVERDUE (due ${nextServiceDue.toLocaleString()})` : `Next svc: ${nextServiceDue.toLocaleString()} ${odoUnit(vt)}`}
                                 </span>
                               )}
                             </div>
@@ -5891,9 +5915,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                 <div style={{ fontSize: 11, color: "#64748b" }}>
                                   {svc ? (
                                     <>
-                                      <strong style={{ color: "#374151" }}>Service:</strong> {svc.lastServiceDate} at {svc.lastServiceKms?.toLocaleString()} km
-                                      {" \u00B7 "}<strong>Next due:</strong> {(svc.lastServiceKms + SERVICE_INTERVAL_KM).toLocaleString()} km
-                                      {latestOdo && svc.lastServiceKms && <>{" \u00B7 "}<strong>{(latestOdo - svc.lastServiceKms).toLocaleString()} km</strong> since service</>}
+                                      <strong style={{ color: "#374151" }}>Service:</strong> {svc.lastServiceDate} at {svc.lastServiceKms?.toLocaleString()} {odoUnit(vt)}
+                                      {" \u00B7 "}<strong>Next due:</strong> {(svc.lastServiceKms + serviceInterval(vt)).toLocaleString()} {odoUnit(vt)}
+                                      {latestOdo && svc.lastServiceKms && <>{" \u00B7 "}<strong>{(latestOdo - svc.lastServiceKms).toLocaleString()} {odoUnit(vt)}</strong> since service</>}
                                     </>
                                   ) : <span style={{ color: "#94a3b8" }}>No service record {"\u2014"} use {"\u22EF"} menu to add</span>}
                                 </div>
@@ -5921,22 +5945,22 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                       <tr style={{ background: "#fafafa" }}>
                                         <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Rego</th>
                                         <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Date</th>
-                                        <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Odo Start</th>
-                                        <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Odo Finish</th>
-                                        <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>KM Trav.</th>
+                                        <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>{isHoursBased(vt) ? "Hrs Start" : "Odo Start"}</th>
+                                        <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>{isHoursBased(vt) ? "Hrs Finish" : "Odo Finish"}</th>
+                                        <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>{isHoursBased(vt) ? "Hrs Used" : "KM Trav."}</th>
                                         <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Litres</th>
                                         <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>$/L</th>
                                         <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0", borderRight: "1px solid #e2e8f0" }}>Fuel Cost</th>
                                         <th style={{ background: "#f8fafc", width: 3, padding: 0, borderBottom: "1px solid #e2e8f0" }}></th>
-                                        <th style={{ color: "#1e40af", borderBottom: "1px solid #e2e8f0" }}>L/km</th>
-                                        <th style={{ color: "#1e40af", borderBottom: "1px solid #e2e8f0" }}>KM Trav.</th>
+                                        <th style={{ color: "#1e40af", borderBottom: "1px solid #e2e8f0" }}>{isHoursBased(vt) ? "L/hr" : "L/km"}</th>
+                                        <th style={{ color: "#1e40af", borderBottom: "1px solid #e2e8f0" }}>{isHoursBased(vt) ? "Hrs Used" : "KM Trav."}</th>
                                         <th style={{ color: "#1e40af", borderBottom: "1px solid #e2e8f0" }}>Tot. Litres</th>
                                         <th style={{ color: "#1e40af", borderBottom: "1px solid #e2e8f0" }}>Petrol $/L</th>
                                         <th style={{ color: "#1e40af", borderBottom: "1px solid #e2e8f0" }}>Calc Cost</th>
                                         <th style={{ color: "#1e40af", borderBottom: "1px solid #e2e8f0", borderRight: "1px solid #e2e8f0" }}>+/- Var.</th>
                                         <th style={{ background: "#f8fafc", width: 3, padding: 0, borderBottom: "1px solid #e2e8f0" }}></th>
                                         <th style={{ color: "#854d0e", borderBottom: "1px solid #e2e8f0" }}>Svc Date</th>
-                                        <th style={{ color: "#854d0e", borderBottom: "1px solid #e2e8f0" }}>Svc KMs</th>
+                                        <th style={{ color: "#854d0e", borderBottom: "1px solid #e2e8f0" }}>{isHoursBased(vt) ? "Svc Hrs" : "Svc KMs"}</th>
                                         <th style={{ color: "#854d0e", borderBottom: "1px solid #e2e8f0" }}>Next Due</th>
                                         <th style={{ borderBottom: "1px solid #e2e8f0", width: 30 }}></th>
                                       </tr>
@@ -5977,7 +6001,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                               fontWeight: 600,
                                               color: lPerKm != null ? (lPerKm > effRange.high ? "#dc2626" : lPerKm < effRange.low ? "#2563eb" : "#15803d") : "#94a3b8"
                                             }}>
-                                              {lPerKm != null ? lPerKm.toFixed(3) : "\u2014"}
+                                              {lPerKm != null ? lPerKm.toFixed(isHoursBased(vt) ? 1 : 3) : "\u2014"}
                                             </td>
                                             <td style={{ color: "#64748b" }}>{kmTravelled != null ? kmTravelled.toLocaleString() : "\u2014"}</td>
                                             <td style={{ color: "#64748b" }}>{litres != null ? `${litres}L` : "\u2014"}</td>
@@ -6162,7 +6186,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       const div = latest?.division || getDivision(vt) || "Tree";
       const svc = getLatestService(serviceData[rego]);
       const latestOdo = latest?.odometer || 0;
-      const nextServiceDue = svc?.lastServiceKms ? svc.lastServiceKms + SERVICE_INTERVAL_KM : null;
+      const nextServiceDue = svc?.lastServiceKms ? svc.lastServiceKms + serviceInterval(vt) : null;
       const kmSinceService = svc?.lastServiceKms ? latestOdo - svc.lastServiceKms : null;
       const kmToService = nextServiceDue ? nextServiceDue - latestOdo : null;
 
@@ -6170,7 +6194,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       let svcStatus = "unknown"; // unknown, ok, approaching, due, overdue
       if (!svc?.lastServiceKms) svcStatus = "unknown";
       else if (latestOdo >= nextServiceDue) svcStatus = "overdue";
-      else if (kmToService <= SERVICE_WARNING_KM) svcStatus = "approaching";
+      else if (kmToService <= serviceWarning(vt)) svcStatus = "approaching";
       else svcStatus = "ok";
 
       // Calculate L/km for each fill-up pair
@@ -6571,7 +6595,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                     <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Division</th>
                     <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Type</th>
                     <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Fill-ups</th>
-                    <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>KM</th>
+                    <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>KM/Hrs</th>
                     <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Litres</th>
                     <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Cost</th>
                     <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Drivers</th>
@@ -6739,9 +6763,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                             <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Vehicle</th>
                             <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Odometer</th>
                             <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Fill-ups</th>
-                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Total KM</th>
+                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>{isHoursBased(group.vt) ? "Total Hrs" : "Total KM"}</th>
                             <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Total L</th>
-                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#1e40af" }}>Avg L/km</th>
+                            <th style={{ borderBottom: "2px solid #e2e8f0", color: "#1e40af" }}>{isHoursBased(group.vt) ? "Avg L/hr" : "Avg L/km"}</th>
                             <th style={{ borderBottom: "2px solid #e2e8f0", color: "#1e40af" }}>Trend</th>
                             <th style={{ borderBottom: "2px solid #e2e8f0", color: "#854d0e" }}>Service</th>
                             <th style={{ borderBottom: "2px solid #e2e8f0", color: "#374151" }}>Flags</th>
@@ -6767,7 +6791,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                   fontWeight: 600,
                                   color: v.avgLPerKm ? (v.avgLPerKm > effRange.high ? "#dc2626" : v.avgLPerKm < effRange.low ? "#2563eb" : "#15803d") : "#94a3b8",
                                 }}>
-                                  {v.avgLPerKm ? v.avgLPerKm.toFixed(3) : "\u2014"}
+                                  {v.avgLPerKm ? v.avgLPerKm.toFixed(isHoursBased(v.vt) ? 1 : 3) : "\u2014"}
                                 </td>
                                 <td>
                                   {v.trend === "worsening" && <span style={{ color: "#dc2626", fontWeight: 600, fontSize: 10 }}>{"\u2191"} Worsening</span>}
@@ -6780,7 +6804,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                     {sc.label}
                                     {v.kmToService != null && v.svcStatus !== "unknown" && (
                                       <span style={{ marginLeft: 3, opacity: 0.8 }}>
-                                        {v.svcStatus === "overdue" ? `+${Math.abs(v.kmToService).toLocaleString()}` : v.kmToService.toLocaleString()}km
+                                        {v.svcStatus === "overdue" ? `+${Math.abs(v.kmToService).toLocaleString()}` : v.kmToService.toLocaleString()}{odoUnit(v.vt)}
                                       </span>
                                     )}
                                   </span>
@@ -6814,13 +6838,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>Fill-ups where fuel consumption was 50%+ above that vehicle's own average {"\u2014"} may indicate leaks, theft, incorrect data, or mechanical issues.</div>
             {fleet.filter(v => v.anomalies.length > 0).map(v => (
               <div key={v.rego} style={{ marginBottom: 8 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#374151", marginBottom: 4 }}>{v.rego} <span style={{ fontWeight: 400, color: "#94a3b8" }}>avg {v.avgLPerKm?.toFixed(3)} L/km</span></div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#374151", marginBottom: 4 }}>{v.rego} <span style={{ fontWeight: 400, color: "#94a3b8" }}>avg {v.avgLPerKm?.toFixed(isHoursBased(v.vt) ? 1 : 3)} {isHoursBased(v.vt) ? "L/hr" : "L/km"}</span></div>
                 {v.anomalies.map((a, i) => (
                   <div key={i} style={{ display: "flex", gap: 12, fontSize: 11, color: "#dc2626", padding: "2px 0" }}>
                     <span>{a.date || "?"}</span>
-                    <span style={{ fontWeight: 600 }}>{a.lPerKm.toFixed(3)} L/km</span>
+                    <span style={{ fontWeight: 600 }}>{a.lPerKm.toFixed(isHoursBased(v.vt) ? 1 : 3)} {isHoursBased(v.vt) ? "L/hr" : "L/km"}</span>
                     <span style={{ color: "#94a3b8" }}>+{a.pct}% above avg</span>
-                    <span style={{ color: "#64748b" }}>{a.litres}L / {a.km.toLocaleString()}km</span>
+                    <span style={{ color: "#64748b" }}>{a.litres}L / {a.km.toLocaleString()}{odoUnit(v.vt)}</span>
                   </div>
                 ))}
               </div>
@@ -6981,7 +7005,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         { title: "Service Required", icon: "\uD83D\uDD27", flags: svc, color: "#b91c1c" },
         { title: "Fuel Consumption Issues", icon: "\u26FD", flags: fuel, color: "#b45309" },
         { title: "Cost Discrepancies", icon: "\uD83D\uDCB0", flags: cost, color: "#b45309" },
-        { title: "Odometer / KM Issues", icon: "\uD83D\uDCCF", flags: odo, color: "#b45309" },
+        { title: "Odometer / Distance / Hours Issues", icon: "\uD83D\uDCCF", flags: odo, color: "#b45309" },
         { title: "Other", icon: "\u26A1", flags: other, color: "#64748b" },
       ].filter(g => g.flags.length > 0);
     };
@@ -8601,6 +8625,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       </div>
       {serviceModal && (
         <ServiceModal rego={serviceModal} current={serviceData[serviceModal]}
+          vehicleType={entries.find(e => e.registration === serviceModal)?.vehicleType || ""}
           onSave={handleServiceSave} onClose={() => setServiceModal(null)} />
       )}
       {editingEntry && (
