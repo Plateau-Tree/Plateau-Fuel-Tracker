@@ -2671,6 +2671,7 @@ export default function App() {
   const [editingCard, setEditingCard] = useState(null); // { oldCard, newCard, newDrivers, newRegos } for inline card header editing
   const [expandedFuelType, setExpandedFuelType] = useState(null);
   const [collapsedFleetGroups, setCollapsedFleetGroups] = useState({});
+  const [worseningFilter, setWorseningFilter] = useState(false); // highlight worsening vehicles on dashboard
   const [vehicleSpendSort, setVehicleSpendSort] = useState("cost-desc");
   const [showAddVehicleData, setShowAddVehicleData] = useState(false);
   const [dashPeriod, setDashPeriod] = useState("monthly"); // "daily" | "weekly" | "monthly" | "custom" | "all"
@@ -6448,8 +6449,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     const periodVehicles = Object.values(periodByVehicle).sort((a, b) => b.cost - a.cost);
     const periodTotalKm = periodVehicles.reduce((s, v) => s + v.km, 0);
 
-    // Sort fleet: overdue first, then approaching, then by most flags
+    // Sort fleet: when worsening filter active, bring those to top; otherwise overdue first
     const sorted = [...fleet].sort((a, b) => {
+      if (worseningFilter) {
+        const aw = a.trend === "worsening" ? 0 : 1;
+        const bw = b.trend === "worsening" ? 0 : 1;
+        if (aw !== bw) return aw - bw;
+      }
       const statusOrder = { overdue: 0, approaching: 1, unknown: 2, ok: 3 };
       const sa = statusOrder[a.svcStatus] ?? 2;
       const sb = statusOrder[b.svcStatus] ?? 2;
@@ -6804,11 +6810,82 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             <div style={{ fontSize: 22, fontWeight: 700, color: "#b45309" }}>{approaching.length}</div>
             <div style={{ fontSize: 10, color: "#92400e", marginTop: 2, fontWeight: 600 }}>Service Due Soon</div>
           </div>
-          <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 10, padding: "12px 10px", textAlign: "center" }}>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#c2410c" }}>{worsening.length}</div>
-            <div style={{ fontSize: 10, color: "#c2410c", marginTop: 2, fontWeight: 600 }}>Efficiency Worsening</div>
-          </div>
+          <button onClick={() => setWorseningFilter(!worseningFilter)} style={{
+            background: worseningFilter ? "#c2410c" : "#fff7ed",
+            border: `2px solid ${worseningFilter ? "#c2410c" : "#fdba74"}`,
+            borderRadius: 10, padding: "12px 10px", textAlign: "center", cursor: "pointer",
+            fontFamily: "inherit", width: "100%", transition: "all 0.2s",
+          }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: worseningFilter ? "white" : "#c2410c" }}>{worsening.length}</div>
+            <div style={{ fontSize: 10, color: worseningFilter ? "rgba(255,255,255,0.9)" : "#c2410c", marginTop: 2, fontWeight: 600 }}>
+              {worseningFilter ? "\u2713 Showing Worsening" : "Efficiency Worsening"}
+            </div>
+          </button>
         </div>
+
+        {/* Worsening vehicles detail panel */}
+        {worseningFilter && worsening.length > 0 && (
+          <div className="fade-in" style={{
+            background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 10,
+            padding: 16, marginBottom: 20,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#c2410c" }}>
+                {"\u26A0"} {worsening.length} Vehicle{worsening.length !== 1 ? "s" : ""} with Worsening Efficiency
+              </div>
+              <button onClick={() => setWorseningFilter(false)} style={{
+                background: "none", border: "none", fontSize: 18, color: "#c2410c", cursor: "pointer",
+              }}>{"\u00D7"}</button>
+            </div>
+            <div style={{ fontSize: 11, color: "#92400e", marginBottom: 12 }}>
+              These vehicles show 15%+ higher fuel consumption in recent fill-ups compared to their earlier average.
+              Review their entry history to identify causes.
+            </div>
+            {worsening.map(v => {
+              const effRange = EFFICIENCY_RANGES[v.vt] || EFFICIENCY_RANGES.Other;
+              const hb = isHoursBased(v.vt);
+              const unit = hb ? "L/hr" : "L/km";
+              const recent3 = v.efficiencies.slice(-3);
+              const earlier = v.efficiencies.slice(0, -3);
+              const recentAvg = recent3.length > 0 ? recent3.reduce((s, e) => s + e.lPerKm, 0) / recent3.length : null;
+              const earlierAvg = earlier.length > 0 ? earlier.reduce((s, e) => s + e.lPerKm, 0) / earlier.length : null;
+              const pctIncrease = earlierAvg && recentAvg ? Math.round(((recentAvg - earlierAvg) / earlierAvg) * 100) : null;
+              return (
+                <div key={v.rego} style={{
+                  background: "white", border: "1px solid #e2e8f0", borderRadius: 8,
+                  padding: "10px 14px", marginBottom: 8,
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 700, color: "#0f172a", fontSize: 14 }}>{v.rego}</span>
+                        {v.vehicleName && <span style={{ fontSize: 11, color: "#94a3b8" }}>{v.vehicleName}</span>}
+                        <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#fef2f2", color: "#dc2626", fontWeight: 600, border: "1px solid #fca5a5" }}>
+                          {"\u2191"} {pctIncrease != null ? `+${pctIncrease}%` : "worsening"}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", gap: 16, fontSize: 11, color: "#64748b", marginTop: 4 }}>
+                        <span>{v.div} {"\u00B7"} {v.vt}</span>
+                        {earlierAvg != null && <span>Before: <strong style={{ color: "#374151" }}>{earlierAvg.toFixed(hb ? 1 : 3)} {unit}</strong></span>}
+                        {recentAvg != null && <span>Recent: <strong style={{ color: "#dc2626" }}>{recentAvg.toFixed(hb ? 1 : 3)} {unit}</strong></span>}
+                        <span>{v.fillUps} fill-ups</span>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      <button onClick={() => {
+                        setView("data"); setDataSearch(v.rego); setExpandedRego(v.rego);
+                      }} style={{
+                        padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                        background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe",
+                        cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                      }}>{"\uD83D\uDCCA"} View History</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {/* Fleet table — grouped by division → vehicle type */}
         {(() => {
