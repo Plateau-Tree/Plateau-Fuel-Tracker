@@ -7653,8 +7653,8 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                       <thead>
                         <tr style={{ background: "#e2e8f0" }}>
-                          {["Date", "Vehicle/Item", "Station", "Litres", "$/L", "Cost", "Odo"].map(h => (
-                            <th key={h} style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: "#374151", whiteSpace: "nowrap" }}>{h}</th>
+                          {["Date", "Vehicle/Item", "Station", "Litres", "$/L", "Cost", "Odo", ...(isAdmin ? [""] : [])].map(h => (
+                            <th key={h || "_actions"} style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: "#374151", whiteSpace: "nowrap" }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
@@ -7668,6 +7668,27 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                             <td style={{ padding: "5px 8px" }}>{e.pricePerLitre ? `$${parseFloat(e.pricePerLitre).toFixed(3)}` : "—"}</td>
                             <td style={{ padding: "5px 8px", fontWeight: 500 }}>{e.totalCost ? `$${parseFloat(e.totalCost).toFixed(2)}` : "—"}</td>
                             <td style={{ padding: "5px 8px", color: "#64748b" }}>{e.odometer || "—"}</td>
+                            {isAdmin && (
+                              <td style={{ padding: "5px 4px", whiteSpace: "nowrap" }}>
+                                {e.hasReceipt && (
+                                  <button onClick={() => setViewingReceipt(e.id)} title="View receipt" style={{
+                                    background: "none", border: "none", color: "#7c3aed", cursor: "pointer",
+                                    fontSize: 13, lineHeight: 1, padding: "2px 4px",
+                                  }}>{"\uD83D\uDCC4"}</button>
+                                )}
+                                <button onClick={() => setEditingEntry(e)} title="Edit entry" style={{
+                                  background: "none", border: "none", color: "#2563eb", cursor: "pointer",
+                                  fontSize: 13, lineHeight: 1, padding: "2px 4px",
+                                }}>{"\u270E"}</button>
+                                <button onClick={() => setConfirmAction({
+                                  message: `Delete this ${e.registration || e.equipment || ""} entry from ${e.date || "unknown date"}? This will remove it from all sections.`,
+                                  onConfirm: async () => { await deleteEntry(e.id); setConfirmAction(null); }
+                                })} title="Delete entry" style={{
+                                  background: "none", border: "none", color: "#cbd5e1", cursor: "pointer",
+                                  fontSize: 15, lineHeight: 1, padding: "2px 4px",
+                                }}>{"\u00D7"}</button>
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>
