@@ -3503,7 +3503,25 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             return best;
           }
         }
-        // Smart fallback: match by vehicle size — larger vehicles get higher litres
+        // Smart fallback 1: match by fuel type — if vehicle has a known fuel type, match to the scanned line with the same fuel type
+        const spFuel = (sp.fuelType || sp._match?.f || "").toLowerCase();
+        if (spFuel && availableLines.length > 1) {
+          const fuelMatch = availableLines.find(l => {
+            const lFuel = (l.fuelType || "").toLowerCase();
+            if (!lFuel) return false;
+            // Match diesel variants together, unleaded/petrol variants together
+            const isDiesel = (f) => /diesel|gas\s*oil/i.test(f);
+            const isUnleaded = (f) => /unleaded|petrol|premium\s*\d|e10|ulp|pulp|95|98/i.test(f);
+            if (isDiesel(spFuel) && isDiesel(lFuel)) return true;
+            if (isUnleaded(spFuel) && isUnleaded(lFuel)) return true;
+            return lFuel.includes(spFuel) || spFuel.includes(lFuel);
+          });
+          if (fuelMatch) {
+            availableLines.splice(availableLines.indexOf(fuelMatch), 1);
+            return fuelMatch;
+          }
+        }
+        // Smart fallback 2: match by vehicle size — larger vehicles get higher litres
         if (availableLines.length > 1) {
           const rank = VEHICLE_FUEL_RANK[spType] || 99;
           // Large vehicles (rank 1-5) get the highest litre line, small ones get the lowest
@@ -3596,11 +3614,23 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           if (!sp.rego) continue;
           const matchedLine = findBestLine(sp);
           const match = lookupRego(sp.rego, learnedDBRef.current, entriesRef.current) || sp._match;
-          // If no litres entered, calculate remainder: total - all other entered litres
+          // Determine litres: user-entered → matched scanned line → remainder calculation → 0
           let spLitresVal = parseFloat(sp.litres) || 0;
+          if (!spLitresVal && matchedLine?.litres) {
+            // AI scanned line has litres — use them directly (no user input needed)
+            spLitresVal = matchedLine.litres;
+          }
           if (!spLitresVal && parsedLitresTotal > 0) {
-            const v1Used = parseFloat(form.litres) || 0;
-            const otherSplitsUsed = splits.filter(s => s.splitType === "vehicle" && s.id !== sp.id).reduce((s, o) => s + (parseFloat(o.litres) || 0), 0);
+            // Fallback: calculate remainder from total minus all other known litres
+            const v1Used = parseFloat(form.litres) || primaryLine?.litres || 0;
+            const otherSplitsUsed = splits.filter(s => s.splitType === "vehicle" && s.id !== sp.id).reduce((s, o) => {
+              // Use user-entered litres, or the matched line's litres if available
+              const userL = parseFloat(o.litres) || 0;
+              if (userL > 0) return s + userL;
+              // Check if this split's scanned line has litres
+              const oLine = o._matchedLine;
+              return s + (oLine?.litres || 0);
+            }, 0);
             const remainder = parseFloat((parsedLitresTotal - v1Used - otherSplitsUsed).toFixed(2));
             if (remainder > 0) spLitresVal = remainder;
           }
@@ -3608,7 +3638,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             sp.rego.trim().toUpperCase(),
             sp.division || match?.d || "",
             sp.vehicleType || match?.t || "",
-            sp.odometer, spLitresVal || matchedLine?.litres || 0, match, matchedLine
+            sp.odometer, spLitresVal || 0, match, matchedLine
           );
           if (sp._costOverride) splitEntry.totalCost = parseFloat(sp._costOverride) || splitEntry.totalCost;
           if (sp._pplOverride) splitEntry.pricePerLitre = parseFloat(sp._pplOverride) || splitEntry.pricePerLitre;
