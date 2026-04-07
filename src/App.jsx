@@ -2006,6 +2006,38 @@ function ReceiptViewer({ entryId, entry, loadFn, onClose }) {
   );
 }
 
+// ─── Inline Receipt (for flags / review panels) ─────────────────────────
+function InlineReceipt({ entryId, loadFn }) {
+  const [img, setImg] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      const data = await loadFn(entryId);
+      if (!cancelled) { setImg(data); setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [entryId, loadFn]);
+  return (
+    <div style={{ marginTop: 8, borderRadius: 8, overflow: "hidden", border: "1px solid #e2e8f0", background: "#f8fafc" }}>
+      {loading ? (
+        <div style={{ textAlign: "center", padding: "16px 0", color: "#94a3b8", fontSize: 11 }}>Loading receipt...</div>
+      ) : img ? (
+        <img src={img.url || `data:${img.mime};base64,${img.b64}`} alt="Receipt" style={{
+          width: "100%", display: "block", cursor: "zoom-in",
+        }} onClick={e => {
+          // Open full-size in new tab for zooming
+          const w = window.open();
+          if (w) { w.document.write(`<img src="${img.url || `data:${img.mime};base64,${img.b64}`}" style="max-width:100%">`); w.document.title = "Receipt"; }
+        }} />
+      ) : (
+        <div style={{ textAlign: "center", padding: "16px 0", color: "#94a3b8", fontSize: 11 }}>No receipt image found</div>
+      )}
+    </div>
+  );
+}
+
 // ─── Manual Add Entry Modal ──────────────────────────────────────────────
 function ManualEntryModal({ rego, division, vehicleType, onSave, onClose }) {
   const [f, setF] = useState({
@@ -2595,6 +2627,7 @@ export default function App() {
   const [resolvedFlags, setResolvedFlags] = useState({}); // { "flagId": { by, note, at } }
   const [flagsFilter, setFlagsFilter] = useState("open"); // "open" | "resolved" | "all"
   const [replyingFlag, setReplyingFlag] = useState(null); // flagId currently being responded to
+  const [expandedReceipt, setExpandedReceipt] = useState(null); // flagId or entryId whose receipt is shown inline
   const [editingEntry, setEditingEntry] = useState(null); // entry object being edited
   const [vehicleMenu, setVehicleMenu] = useState(null); // rego string for open menu
   const [editingVehicle, setEditingVehicle] = useState(null); // rego string for edit vehicle modal
@@ -5545,11 +5578,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                     </div>
                     <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                       {f._entry?.hasReceipt && (
-                        <button onClick={() => setViewingReceipt(f._entry.id)} style={{
+                        <button onClick={() => setExpandedReceipt(expandedReceipt === f._id ? null : f._id)} style={{
                           padding: "4px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
-                          background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe",
+                          background: expandedReceipt === f._id ? "#2563eb" : "#eff6ff",
+                          color: expandedReceipt === f._id ? "white" : "#2563eb",
+                          border: `1px solid ${expandedReceipt === f._id ? "#2563eb" : "#bfdbfe"}`,
                           cursor: "pointer", fontFamily: "inherit",
-                        }}>{"\uD83D\uDCC4"} Receipt</button>
+                        }}>{"\uD83D\uDCC4"} {expandedReceipt === f._id ? "Hide" : "Receipt"}</button>
                       )}
                       <button onClick={() => setEditingEntry(f._entry)} style={{
                         padding: "4px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
@@ -5565,6 +5600,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                       }}>{"\u2713"} OK</button>
                     </div>
                   </div>
+                  {expandedReceipt === f._id && f._entry?.hasReceipt && (
+                    <InlineReceipt entryId={f._entry.id} loadFn={loadReceiptImage} />
+                  )}
                 </div>
               ))}
             </div>
@@ -7073,11 +7111,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             {/* Action buttons */}
             <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
               {f._entry?.hasReceipt && (
-                <button onClick={() => { setViewingReceipt(f._entry.id); setShowFlags(false); }} style={{
+                <button onClick={() => setExpandedReceipt(expandedReceipt === f._id ? null : f._id)} style={{
                   padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600,
-                  background: "#faf5ff", color: "#7c3aed", border: "1px solid #c4b5fd",
+                  background: expandedReceipt === f._id ? "#7c3aed" : "#faf5ff",
+                  color: expandedReceipt === f._id ? "white" : "#7c3aed",
+                  border: `1px solid ${expandedReceipt === f._id ? "#7c3aed" : "#c4b5fd"}`,
                   cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
-                }}>{"\uD83D\uDCC4"} Receipt</button>
+                }}>{"\uD83D\uDCC4"} {expandedReceipt === f._id ? "Hide" : "Receipt"}</button>
               )}
               {!isResolved && !isReplying && (
                 <button onClick={() => setReplyingFlag(f._id)} style={{
@@ -7095,6 +7135,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               )}
             </div>
           </div>
+          {expandedReceipt === f._id && f._entry?.hasReceipt && (
+            <InlineReceipt entryId={f._entry.id} loadFn={loadReceiptImage} />
+          )}
         </div>
       );
     };
@@ -7289,11 +7332,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                     </div>
                     <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                       {f._entry?.hasReceipt && (
-                        <button onClick={() => { setViewingReceipt(f._entry.id); setShowAiFlags(false); }} style={{
+                        <button onClick={() => setExpandedReceipt(expandedReceipt === f._id ? null : f._id)} style={{
                           padding: "4px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
-                          background: "#faf5ff", color: "#7c3aed", border: "1px solid #c4b5fd",
+                          background: expandedReceipt === f._id ? "#7c3aed" : "#faf5ff",
+                          color: expandedReceipt === f._id ? "white" : "#7c3aed",
+                          border: `1px solid ${expandedReceipt === f._id ? "#7c3aed" : "#c4b5fd"}`,
                           cursor: "pointer", fontFamily: "inherit",
-                        }}>{"\uD83D\uDCC4"} Receipt</button>
+                        }}>{"\uD83D\uDCC4"} {expandedReceipt === f._id ? "Hide" : "Receipt"}</button>
                       )}
                       {!isResolved && f._entry && (
                         <button onClick={() => { setEditingEntry(f._entry); setShowAiFlags(false); }} style={{
@@ -7318,6 +7363,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                       )}
                     </div>
                   </div>
+                  {expandedReceipt === f._id && f._entry?.hasReceipt && (
+                    <InlineReceipt entryId={f._entry.id} loadFn={loadReceiptImage} />
+                  )}
                 </div>
               );
             })
