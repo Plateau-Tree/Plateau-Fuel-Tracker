@@ -2113,7 +2113,7 @@ function ManualEntryModal({ rego, division, vehicleType, onSave, onClose }) {
 }
 
 // ─── Edit Entry Modal ────────────────────────────────────────────────────
-function EditEntryModal({ entry, onSave, onDelete, onClose }) {
+function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
   const [f, setF] = useState({
     driverName: entry.driverName || "",
     date: entry.date || "",
@@ -2127,27 +2127,82 @@ function EditEntryModal({ entry, onSave, onDelete, onClose }) {
     vehicleType: entry.vehicleType || "",
   });
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }));
+  const [showReceipt, setShowReceipt] = useState(!!entry.hasReceipt);
+  const [receiptImg, setReceiptImg] = useState(null);
+  const [receiptLoading, setReceiptLoading] = useState(false);
+
+  useEffect(() => {
+    if (showReceipt && entry.hasReceipt && loadReceiptFn && !receiptImg) {
+      setReceiptLoading(true);
+      loadReceiptFn(entry.id).then(data => { setReceiptImg(data); setReceiptLoading(false); }).catch(() => setReceiptLoading(false));
+    }
+  }, [showReceipt, entry.id, entry.hasReceipt, loadReceiptFn, receiptImg]);
 
   const activeDivision = f.division ? DIVISIONS[f.division] : null;
   const divTypes = activeDivision ? activeDivision.types : [];
+  const hasReceipt = entry.hasReceipt && loadReceiptFn;
 
   return (
     <div style={{
       position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex",
-      alignItems: "flex-start", justifyContent: "center", zIndex: 100, padding: "40px 16px",
+      alignItems: "flex-start", justifyContent: "center", zIndex: 100, padding: "24px 16px",
       overflowY: "auto",
     }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{
-        background: "white", borderRadius: 12, padding: 24, width: "100%", maxWidth: 440,
-        boxShadow: "0 20px 40px rgba(0,0,0,0.15)", maxHeight: "85vh", overflowY: "auto",
+        background: "white", borderRadius: 12, width: "100%",
+        maxWidth: hasReceipt && showReceipt ? 900 : 440,
+        boxShadow: "0 20px 40px rgba(0,0,0,0.15)", maxHeight: "90vh", overflowY: "auto",
+        transition: "max-width 0.3s ease",
       }} className="fade-in">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "20px 24px 0 24px" }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Edit Entry</div>
             <div style={{ fontSize: 12, color: "#64748b" }}>{entry.registration} {"\u00B7"} {entry.date || "No date"}</div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: "#94a3b8", cursor: "pointer" }}>{"\u00D7"}</button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {hasReceipt && (
+              <button onClick={() => setShowReceipt(!showReceipt)} style={{
+                padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                background: showReceipt ? "#7c3aed" : "#faf5ff",
+                color: showReceipt ? "white" : "#7c3aed",
+                border: `1px solid ${showReceipt ? "#7c3aed" : "#c4b5fd"}`,
+                cursor: "pointer", fontFamily: "inherit",
+              }}>{"\uD83D\uDCC4"} {showReceipt ? "Hide Receipt" : "Show Receipt"}</button>
+            )}
+            <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: "#94a3b8", cursor: "pointer" }}>{"\u00D7"}</button>
+          </div>
         </div>
+
+        {/* Split layout: receipt + form side by side */}
+        <div style={{
+          display: hasReceipt && showReceipt ? "flex" : "block",
+          flexWrap: "wrap", gap: 0,
+        }}>
+          {/* Receipt panel */}
+          {hasReceipt && showReceipt && (
+            <div style={{
+              flex: "1 1 320px", minWidth: 280, maxHeight: "80vh", overflowY: "auto",
+              padding: "16px 20px", borderRight: "1px solid #e2e8f0", background: "#f8fafc",
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>{"\uD83D\uDCC4"} Receipt Image</div>
+              {receiptLoading ? (
+                <div style={{ textAlign: "center", padding: "32px 0", color: "#94a3b8", fontSize: 12 }}>Loading receipt...</div>
+              ) : receiptImg ? (
+                <img src={receiptImg.url || `data:${receiptImg.mime};base64,${receiptImg.b64}`} alt="Receipt" style={{
+                  width: "100%", borderRadius: 8, border: "1px solid #e2e8f0", cursor: "zoom-in",
+                }} onClick={() => {
+                  const w = window.open();
+                  if (w) { w.document.write(`<img src="${receiptImg.url || `data:${receiptImg.mime};base64,${receiptImg.b64}`}" style="max-width:100%">`); w.document.title = "Receipt"; }
+                }} />
+              ) : (
+                <div style={{ textAlign: "center", padding: "32px 0", color: "#94a3b8", fontSize: 12 }}>No receipt image found</div>
+              )}
+            </div>
+          )}
+
+          {/* Edit form */}
+          <div style={{ flex: "1 1 360px", minWidth: 300, padding: "16px 24px 24px 24px" }}>
 
         <FieldInput label="Driver Name" value={f.driverName} onChange={v => set("driverName", v)} placeholder="Driver name" required />
         <FieldInput label="Date" value={f.date} onChange={v => set("date", v)} placeholder="DD/MM/YYYY" required />
@@ -2228,6 +2283,8 @@ function EditEntryModal({ entry, onSave, onDelete, onClose }) {
             }}>Save Changes</PrimaryBtn>
           </div>
         </div>
+        </div>{/* end form panel */}
+        </div>{/* end split layout */}
       </div>
     </div>
   );
@@ -8703,6 +8760,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           onSave={(updated) => { updateEntry(updated); setEditingEntry(null); }}
           onDelete={(id) => { deleteEntry(id); setEditingEntry(null); }}
           onClose={() => setEditingEntry(null)}
+          loadReceiptFn={loadReceiptImage}
         />
       )}
       {renderFlagsModal()}
