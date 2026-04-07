@@ -2710,6 +2710,7 @@ export default function App() {
   const [worseningFilter, setWorseningFilter] = useState(false); // highlight worsening vehicles on dashboard
   const [vehicleSpendSort, setVehicleSpendSort] = useState("cost-desc");
   const [expandedSpendVehicle, setExpandedSpendVehicle] = useState(null); // rego expanded in spend section
+  const [pendingExtraEntries, setPendingExtraEntries] = useState(null); // auto-detected extra receipt lines after submission
   const [showAddVehicleData, setShowAddVehicleData] = useState(false);
   const [dashPeriod, setDashPeriod] = useState("monthly"); // "daily" | "weekly" | "monthly" | "custom" | "all"
   const [dashDate, setDashDate] = useState(() => new Date().toISOString().slice(0, 10)); // YYYY-MM-DD
@@ -3157,6 +3158,7 @@ export default function App() {
     setCardPreview(null); setCardB64(null); setCardData(null);
     setManualCard(false); setManualCardNum(""); setManualCardRego("");
     setSplitMode(false); setSplits([]);
+    setPendingExtraEntries(null);
     setError("");
   };
 
@@ -3669,6 +3671,62 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         await saveReceiptImage(eid, receiptB64, receiptMime);
       }
     }
+
+    // ── Auto-detect extra receipt lines that the user didn't account for ──
+    // If user only entered 1 vehicle (no split mode) but receipt has multiple fuel lines or other items,
+    // auto-create draft entries and prompt the user to verify them on Step 4.
+    if (!splitMode && scannedLines.length > 0) {
+      const extraFuelLines = scannedLines.slice(1); // line 0 was used for primary vehicle
+      const extraOtherItems = scannedOtherItems; // none were consumed in non-split mode
+      const now2 = new Date().toISOString();
+
+      if (extraFuelLines.length > 0 || extraOtherItems.length > 0) {
+        const extras = [];
+        extraFuelLines.forEach((line, i) => {
+          extras.push({
+            _draftId: `draft-fuel-${Date.now()}-${i}`,
+            _type: "vehicle",
+            _sourceLabel: line.fuelType || "Fuel",
+            _line: line,
+            rego: "",
+            division: "",
+            vehicleType: "",
+            odometer: "",
+            litres: line.litres || null,
+            pricePerLitre: line.pricePerLitre || null,
+            cost: line.cost || null,
+            fuelType: line.fuelType || "",
+            date: receiptData?.date || "",
+            station: receiptData?.station || "",
+            driverFirstName: form.driverFirstName?.trim() || "",
+            driverLastName: form.driverLastName?.trim() || "",
+            fleetCardNumber: cardNum || "",
+            _confirmed: false,
+          });
+        });
+        extraOtherItems.forEach((item, i) => {
+          extras.push({
+            _draftId: `draft-other-${Date.now()}-${i}`,
+            _type: "other",
+            _sourceLabel: item.description || "Other item",
+            _item: item,
+            equipment: item.description || "",
+            litres: item.litres || null,
+            pricePerLitre: item.pricePerLitre || null,
+            cost: item.cost || null,
+            date: receiptData?.date || "",
+            station: receiptData?.station || "",
+            driverFirstName: form.driverFirstName?.trim() || "",
+            driverLastName: form.driverLastName?.trim() || "",
+            division: form.division || "Tree",
+            linkedVehicle: form.registration?.trim().toUpperCase() || "",
+            _confirmed: false,
+          });
+        });
+        setPendingExtraEntries(extras);
+      }
+    }
+
     setSaving(false);
     setStep(4);
   };
@@ -4423,11 +4481,24 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
 
         {error && <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 13, color: "#b91c1c" }}>{error}</div>}
         <PrimaryBtn onClick={() => {
-          if (!form.driverFirstName || !form.driverLastName || !form.registration || !form.division || !form.vehicleType || !form.odometer) { setError("Please fill in all required fields."); return; }
+          // Specific validation messages so users know exactly what's missing
+          const missing = [];
+          if (!form.driverFirstName) missing.push("First Name");
+          if (!form.driverLastName) missing.push("Last Name");
+          if (!form.registration) missing.push("Vehicle Registration");
+          if (!form.division) missing.push("Division");
+          if (!form.vehicleType) missing.push("Vehicle Type");
+          if (!form.odometer) missing.push(isHoursBased(form.vehicleType) ? "Hour Meter Reading" : "Odometer Reading");
+          if (missing.length > 0) {
+            setError(`Please fill in: ${missing.join(", ")}`);
+            return;
+          }
           if (splitMode) {
-            for (const sp of splits) {
-              if (sp.splitType === "vehicle" && (!sp.rego || !sp.odometer)) { setError("Please fill in rego and odometer for all vehicles."); return; }
-              if (sp.splitType === "other" && !sp.equipment) { setError("Please enter the equipment/purpose for all other items."); return; }
+            for (let si = 0; si < splits.length; si++) {
+              const sp = splits[si];
+              if (sp.splitType === "vehicle" && !sp.rego) { setError(`Vehicle ${si + 2}: Please enter the registration`); return; }
+              if (sp.splitType === "vehicle" && !sp.odometer) { setError(`Vehicle ${si + 2} (${sp.rego || "?"}): Please enter the ${isHoursBased(sp.vehicleType) ? "hour reading" : "odometer"}`); return; }
+              if (sp.splitType === "other" && !sp.equipment) { setError(`Other Item ${si + 1}: Please enter what this is for (e.g. AdBlue, Oil)`); return; }
             }
           }
           document.activeElement?.blur(); setError(""); setStep(2);
@@ -5520,16 +5591,131 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           </div>
         )}
 
+        {/* Duplicate entry warning */}
+        {(() => {
+          const rego = form.registration?.trim().toUpperCase();
+          const dateStr = receiptData?.date || "";
+          const litres = parseFloat(receiptData?.litres) || 0;
+          if (!rego || !dateStr) return null;
+          const dupe = entries.find(e =>
+            e.registration === rego && e.date === dateStr &&
+            litres > 0 && e.litres && Math.abs(e.litres - litres) < litres * 0.1
+          );
+          if (!dupe) return null;
+          return (
+            <div style={{
+              fontSize: 12, color: "#b91c1c", background: "#fef2f2", border: "2px solid #fca5a5",
+              borderRadius: 8, padding: "10px 12px", marginBottom: 12, textAlign: "left",
+            }}>
+              <strong>{"\u26A0"} Possible duplicate!</strong> An entry for <strong>{rego}</strong> on <strong>{dateStr}</strong> with <strong>{dupe.litres}L</strong> already exists.
+              Are you sure this is a different fill-up?
+            </div>
+          );
+        })()}
+
+        {/* Warning if unmatched items exist — user can still submit, but will be prompted after */}
+        {hasUnmatched && !splitMode && (
+          <div style={{
+            fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fbbf24",
+            borderRadius: 8, padding: "8px 12px", marginBottom: 12, textAlign: "left",
+          }}>
+            <strong>{"\u26A0"} Heads up:</strong> Your receipt has extra items that aren't included yet.
+            You can submit now and we'll ask you about them on the next screen,
+            or go back to add them manually.
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: 10 }}>
           <SecondaryBtn onClick={() => setStep(2)}>{"\u2190"} Back</SecondaryBtn>
           <div style={{ flex: 1 }}>
             <PrimaryBtn onClick={handleSubmit} loading={saving}>
-              {splitMode ? `Submit ${1 + splits.length} Entries` : "Submit Entry"}
+              {splitMode ? `Submit ${1 + splits.length} Entries` : hasUnmatched ? "Submit & Review Extras" : "Submit Entry"}
             </PrimaryBtn>
           </div>
         </div>
       </div>
     );
+  };
+
+  // Save a single pending extra entry (vehicle or other)
+  const savePendingExtra = async (draft) => {
+    const now = new Date().toISOString();
+    const driverName = `${draft.driverFirstName || ""} ${draft.driverLastName || ""}`.trim();
+
+    if (draft._type === "vehicle") {
+      if (!draft.rego) { showToast("Please enter a rego for this vehicle"); return; }
+      if (!draft.odometer) { showToast("Please enter an odometer/hour reading"); return; }
+      const match = lookupRego(draft.rego, learnedDBRef.current, entriesRef.current);
+      const entry = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        submittedAt: now,
+        driverName,
+        registration: draft.rego.trim().toUpperCase(),
+        division: draft.division || match?.d || getDivision(draft.vehicleType),
+        vehicleType: draft.vehicleType || match?.t || "",
+        odometer: parseFloat(draft.odometer) || null,
+        date: draft.date,
+        litres: draft.litres || null,
+        pricePerLitre: draft.pricePerLitre || null,
+        totalCost: draft.cost || ((draft.litres || 0) * (draft.pricePerLitre || 0)) || null,
+        station: draft.station,
+        fuelType: draft.fuelType || match?.f || "",
+        fleetCardNumber: draft.fleetCardNumber || match?.c || "",
+        splitReceipt: true,
+        hasReceipt: !!receiptB64,
+        _aiConfidence: receiptData?.confidence?.overall || null,
+        _aiIssues: ["Auto-detected extra fuel line from receipt"],
+      };
+      const newEntries = insertChronological(entries, entry);
+      await persist(newEntries, entry);
+      db.saveEntry(entry).catch(() => {});
+      if (receiptB64) await saveReceiptImage(entry.id, receiptB64, receiptMime);
+      learnFromSubmission(entry);
+    } else {
+      // Other item
+      if (!draft.equipment) { showToast("Please enter equipment/purpose"); return; }
+      const entry = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        submittedAt: now,
+        entryType: "other",
+        division: draft.division || "Tree",
+        driverName,
+        equipment: draft.equipment,
+        station: draft.station,
+        fleetCardNumber: draft.fleetCardNumber || "",
+        date: draft.date,
+        litres: draft.litres || null,
+        pricePerLitre: draft.pricePerLitre || null,
+        totalCost: draft.cost || ((draft.litres || 0) * (draft.pricePerLitre || 0)) || null,
+        fuelType: draft._sourceLabel || "",
+        notes: "",
+        splitReceipt: true,
+        hasReceipt: !!receiptB64,
+        linkedVehicle: draft.linkedVehicle || "",
+      };
+      const newEntries = [...entries, entry];
+      await persist(newEntries, entry);
+      db.saveEntry(entry).catch(() => {});
+      if (receiptB64) await saveReceiptImage(entry.id, receiptB64, receiptMime);
+    }
+
+    // Mark this draft as confirmed
+    setPendingExtraEntries(prev => prev.map(d =>
+      d._draftId === draft._draftId ? { ...d, _confirmed: true } : d
+    ));
+    showToast(`${draft._type === "vehicle" ? "Vehicle" : "Other"} entry saved!`);
+  };
+
+  // Dismiss a pending extra (user says it's not needed)
+  const dismissPendingExtra = (draftId) => {
+    setPendingExtraEntries(prev => prev.filter(d => d._draftId !== draftId));
+  };
+
+  // Update a field on a pending extra draft
+  const updatePendingExtra = (draftId, field, value) => {
+    setPendingExtraEntries(prev => prev.map(d =>
+      d._draftId === draftId ? { ...d, [field]: value } : d
+    ));
   };
 
   const renderStep4 = () => {
@@ -5538,18 +5724,25 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     const fuelType = receiptData?.fuelType || "";
     const station = receiptData?.station || otherForm.station || "";
     const date = receiptData?.date || "";
+    const hasPending = pendingExtraEntries && pendingExtraEntries.some(d => !d._confirmed);
 
     return (
       <div className="fade-in" style={{ textAlign: "center", padding: "24px 0" }}>
-        <div style={{ width: 64, height: 64, borderRadius: "50%", background: otherMode ? "#fefce8" : "#f0fdf4", border: `2px solid ${otherMode ? "#fde047" : "#86efac"}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", fontSize: 28 }}>{"\u2713"}</div>
-        <div style={{ fontSize: 22, fontWeight: 700, color: otherMode ? "#854d0e" : "#15803d", marginBottom: 16 }}>
+        <div style={{ width: 64, height: 64, borderRadius: "50%", background: otherMode ? "#fefce8" : hasPending ? "#fffbeb" : "#f0fdf4", border: `2px solid ${otherMode ? "#fde047" : hasPending ? "#fbbf24" : "#86efac"}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", fontSize: 28 }}>{hasPending ? "\u26A0" : "\u2713"}</div>
+        <div style={{ fontSize: 22, fontWeight: 700, color: otherMode ? "#854d0e" : hasPending ? "#92400e" : "#15803d", marginBottom: 6 }}>
           {otherMode ? "Claim Saved!" : splitMode ? `${1 + splits.length} Entries Saved!` : "Entry Saved!"}
         </div>
+        {hasPending && (
+          <div style={{ fontSize: 13, color: "#92400e", fontWeight: 600, marginBottom: 16 }}>
+            But wait — we found extra items on your receipt!
+          </div>
+        )}
+        {!hasPending && <div style={{ height: 10 }} />}
 
         {/* Summary card */}
         <div style={{
           background: "white", border: "1px solid #e2e8f0", borderRadius: 10,
-          padding: "16px", textAlign: "left", marginBottom: 20,
+          padding: "16px", textAlign: "left", marginBottom: hasPending ? 12 : 20,
         }}>
           {/* Primary entry */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -5593,6 +5786,119 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             </div>
           )}
         </div>
+
+        {/* ── Pending extra entries auto-detected from receipt ── */}
+        {pendingExtraEntries && pendingExtraEntries.length > 0 && (
+          <div style={{ textAlign: "left", marginBottom: 16 }}>
+            {pendingExtraEntries.map((draft, di) => {
+              if (draft._confirmed) {
+                return (
+                  <div key={draft._draftId} style={{
+                    background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 10,
+                    padding: "10px 14px", marginBottom: 8, display: "flex", alignItems: "center", gap: 8,
+                  }}>
+                    <span style={{ fontSize: 18 }}>{"\u2713"}</span>
+                    <span style={{ fontSize: 12, color: "#15803d", fontWeight: 600 }}>
+                      {draft._type === "vehicle" ? `${draft.rego} — saved` : `${draft.equipment} — saved`}
+                    </span>
+                  </div>
+                );
+              }
+
+              const isVehicle = draft._type === "vehicle";
+              return (
+                <div key={draft._draftId} style={{
+                  background: "#fffbeb", border: "2px solid #fbbf24", borderRadius: 10,
+                  padding: "14px", marginBottom: 10,
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>
+                      {isVehicle ? `\u26FD Extra fuel line detected` : `\uD83D\uDEE2 Extra item detected`}
+                    </div>
+                    <button onClick={() => dismissPendingExtra(draft._draftId)} style={{
+                      padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 600,
+                      background: "white", color: "#94a3b8", border: "1px solid #e2e8f0", cursor: "pointer",
+                    }}>Not needed</button>
+                  </div>
+
+                  {/* What we detected */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+                    <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "white", color: "#92400e", border: "1px solid #fbbf24" }}>{draft._sourceLabel}</span>
+                    {draft.litres && <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 500, background: "white", color: "#374151", border: "1px solid #e2e8f0" }}>{draft.litres}L</span>}
+                    {draft.pricePerLitre && <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 500, background: "white", color: "#374151", border: "1px solid #e2e8f0" }}>${draft.pricePerLitre}/L</span>}
+                    {draft.cost && <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "white", color: "#16a34a", border: "1px solid #86efac" }}>${draft.cost.toFixed ? draft.cost.toFixed(2) : draft.cost}</span>}
+                  </div>
+
+                  {/* Input fields the user needs to fill in */}
+                  <div style={{ fontSize: 12, color: "#78350f", fontWeight: 600, marginBottom: 6 }}>
+                    {isVehicle ? "Which vehicle was this fuel for?" : "What was this item for?"}
+                  </div>
+
+                  {isVehicle ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <input value={draft.rego || ""} onChange={e => updatePendingExtra(draft._draftId, "rego", e.target.value.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6))}
+                          placeholder="Vehicle rego *" style={{
+                            flex: 1, padding: "8px 10px", borderRadius: 7, fontSize: 13, fontWeight: 700,
+                            border: "2px solid #fbbf24", background: "white", outline: "none", fontFamily: "inherit",
+                          }}
+                          onBlur={() => {
+                            if (draft.rego) {
+                              const m = lookupRego(draft.rego, learnedDBRef.current, entriesRef.current);
+                              if (m) {
+                                updatePendingExtra(draft._draftId, "division", m.d || "");
+                                updatePendingExtra(draft._draftId, "vehicleType", m.t || "");
+                              }
+                            }
+                          }}
+                        />
+                        <input value={draft.odometer || ""} onChange={e => updatePendingExtra(draft._draftId, "odometer", e.target.value)}
+                          placeholder={isHoursBased(draft.vehicleType) ? "Hour reading *" : "Odometer *"} type="number" style={{
+                            flex: 1, padding: "8px 10px", borderRadius: 7, fontSize: 13,
+                            border: "2px solid #fbbf24", background: "white", outline: "none", fontFamily: "inherit",
+                          }}
+                        />
+                      </div>
+                      {draft.rego && (() => {
+                        const m = lookupRego(draft.rego, learnedDBRef.current, entriesRef.current);
+                        return m ? (
+                          <div style={{ fontSize: 11, color: "#15803d", fontWeight: 500 }}>
+                            {"\u2713"} {m.n || m.t} — {m.d} {m.t ? `(${m.t})` : ""}
+                          </div>
+                        ) : null;
+                      })()}
+                    </div>
+                  ) : (
+                    <input value={draft.equipment || ""} onChange={e => updatePendingExtra(draft._draftId, "equipment", e.target.value)}
+                      placeholder="Equipment/purpose" style={{
+                        width: "100%", padding: "8px 10px", borderRadius: 7, fontSize: 13,
+                        border: "2px solid #fbbf24", background: "white", outline: "none", fontFamily: "inherit",
+                        boxSizing: "border-box",
+                      }}
+                    />
+                  )}
+
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <button onClick={() => savePendingExtra(draft)} style={{
+                      flex: 1, padding: "10px", borderRadius: 7, fontSize: 13, fontWeight: 700,
+                      cursor: "pointer", fontFamily: "inherit",
+                      background: "#f59e0b", color: "white", border: "none",
+                    }}>{"\u2713"} Save this entry</button>
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Dismiss all button */}
+            {hasPending && (
+              <button onClick={() => setPendingExtraEntries(prev => prev.filter(d => d._confirmed))} style={{
+                width: "100%", padding: "8px", borderRadius: 7, fontSize: 11, fontWeight: 600,
+                cursor: "pointer", fontFamily: "inherit", marginTop: 4,
+                background: "white", color: "#94a3b8", border: "1px solid #e2e8f0",
+              }}>Dismiss all extra items — they're not needed</button>
+            )}
+          </div>
+        )}
 
         <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
           <SecondaryBtn onClick={resetForm}>+ New Entry</SecondaryBtn>
