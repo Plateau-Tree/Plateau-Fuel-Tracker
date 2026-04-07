@@ -2673,6 +2673,7 @@ export default function App() {
   const [collapsedFleetGroups, setCollapsedFleetGroups] = useState({});
   const [worseningFilter, setWorseningFilter] = useState(false); // highlight worsening vehicles on dashboard
   const [vehicleSpendSort, setVehicleSpendSort] = useState("cost-desc");
+  const [expandedSpendVehicle, setExpandedSpendVehicle] = useState(null); // rego expanded in spend section
   const [showAddVehicleData, setShowAddVehicleData] = useState(false);
   const [dashPeriod, setDashPeriod] = useState("monthly"); // "daily" | "weekly" | "monthly" | "custom" | "all"
   const [dashDate, setDashDate] = useState(() => new Date().toISOString().slice(0, 10)); // YYYY-MM-DD
@@ -6434,7 +6435,8 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     // Per-vehicle breakdown for this period
     const periodByVehicle = {};
     periodVehicle.forEach(e => {
-      if (!periodByVehicle[e.registration]) periodByVehicle[e.registration] = { rego: e.registration, division: e.division, type: e.vehicleType, litres: 0, cost: 0, fills: 0, km: 0, drivers: new Set(), odos: [] };
+      if (!periodByVehicle[e.registration]) periodByVehicle[e.registration] = { rego: e.registration, division: e.division, type: e.vehicleType, litres: 0, cost: 0, fills: 0, km: 0, drivers: new Set(), odos: [], entries: [] };
+      periodByVehicle[e.registration].entries.push(e);
       periodByVehicle[e.registration].litres += e.litres || 0;
       periodByVehicle[e.registration].cost += e.totalCost || 0;
       periodByVehicle[e.registration].fills += 1;
@@ -6697,44 +6699,114 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                 }}>{"\uD83D\uDCE5"} Export</button>
               </div>
             </div>
-            <div style={{ overflowX: "auto" }}>
-              <table className="data-table">
-                <thead>
-                  <tr style={{ background: "#fafafa" }}>
-                    <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Vehicle</th>
-                    <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Division</th>
-                    <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Type</th>
-                    <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Fill-ups</th>
-                    <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>KM/Hrs</th>
-                    <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Litres</th>
-                    <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Cost</th>
-                    <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Drivers</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedPV.map(v => (
-                    <tr key={v.rego}>
-                      <td style={{ fontWeight: 700, color: "#0f172a" }}>{v.rego}</td>
-                      <td style={{ color: "#64748b", fontSize: 11 }}>{v.division}</td>
-                      <td style={{ color: "#64748b", fontSize: 11 }}>{v.type}</td>
-                      <td style={{ color: "#374151" }}>{v.fills}</td>
-                      <td style={{ color: "#374151" }}>{v.km > 0 ? v.km.toLocaleString() : "\u2014"}</td>
-                      <td style={{ color: "#374151" }}>{v.litres.toFixed(1)}L</td>
-                      <td style={{ fontWeight: 600, color: "#16a34a" }}>${v.cost.toFixed(2)}</td>
-                      <td style={{ color: "#64748b", fontSize: 10 }}>{[...v.drivers].join(", ")}</td>
-                    </tr>
-                  ))}
-                  <tr style={{ background: "#f8fafc", borderTop: "2px solid #e2e8f0" }}>
-                    <td style={{ fontWeight: 700, color: "#374151" }}>TOTAL</td>
-                    <td></td><td></td>
-                    <td style={{ fontWeight: 700 }}>{periodFillUps}</td>
-                    <td style={{ fontWeight: 700 }}>{periodTotalKm > 0 ? periodTotalKm.toLocaleString() : "\u2014"}</td>
-                    <td style={{ fontWeight: 700 }}>{periodLitres.toFixed(0)}L</td>
-                    <td style={{ fontWeight: 700, color: "#16a34a" }}>${periodSpend.toFixed(2)}</td>
-                    <td></td>
-                  </tr>
-                </tbody>
-              </table>
+            {/* Summary bar */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, padding: "10px 14px", borderBottom: "1px solid #e2e8f0", background: "#f0fdf4" }}>
+              {[
+                ["\uD83D\uDE97", `${sortedPV.length} Vehicles`],
+                ["\u26FD", `${periodFillUps} Fill-ups`],
+                ["\uD83D\uDCA7", `${periodLitres.toFixed(0)}L`],
+                ["\uD83D\uDCB0", `$${periodSpend.toFixed(2)}`],
+              ].map(([icon, text]) => (
+                <span key={text} style={{ fontSize: 11, fontWeight: 600, color: "#15803d", background: "white", padding: "3px 10px", borderRadius: 8, border: "1px solid #bbf7d0" }}>{icon} {text}</span>
+              ))}
+            </div>
+            {/* Vehicle cards */}
+            <div style={{ padding: "8px 10px" }}>
+              {sortedPV.map(v => {
+                const maxCost = sortedPV.length > 0 ? Math.max(...sortedPV.map(x => x.cost)) : 1;
+                const pct = periodSpend > 0 ? ((v.cost / periodSpend) * 100) : 0;
+                const barW = maxCost > 0 ? ((v.cost / maxCost) * 100) : 0;
+                const isExpanded = expandedSpendVehicle === v.rego;
+                const hb = isHoursBased(v.type);
+                return (
+                  <div key={v.rego} style={{ marginBottom: 6, border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden", background: isExpanded ? "#f8fafc" : "white" }}>
+                    {/* Vehicle header row - clickable */}
+                    <div onClick={() => setExpandedSpendVehicle(isExpanded ? null : v.rego)}
+                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", cursor: "pointer", flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", minWidth: 80 }}>{v.rego}</span>
+                      <span style={{ padding: "1px 6px", borderRadius: 8, fontSize: 9, fontWeight: 600,
+                        background: v.division === "Tree" ? "#f0fdf4" : "#faf5ff",
+                        color: v.division === "Tree" ? "#15803d" : "#7c3aed",
+                      }}>{v.division || "Tree"}</span>
+                      <span style={{ fontSize: 10, color: "#64748b" }}>{v.type}</span>
+                      <div style={{ flex: 1, minWidth: 60 }}>
+                        <div style={{ height: 6, background: "#e2e8f0", borderRadius: 3, overflow: "hidden" }}>
+                          <div style={{ width: `${barW}%`, height: "100%", background: "linear-gradient(90deg, #22c55e, #16a34a)", borderRadius: 3, transition: "width 0.3s" }} />
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: "#16a34a", minWidth: 70, textAlign: "right" }}>${v.cost.toFixed(2)}</span>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: "#64748b", minWidth: 40, textAlign: "right" }}>{pct.toFixed(1)}%</span>
+                      <span style={{ fontSize: 12, color: "#94a3b8", transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }}>{"\u25BC"}</span>
+                    </div>
+                    {/* Expanded detail */}
+                    {isExpanded && (
+                      <div style={{ borderTop: "1px solid #e2e8f0", padding: "8px 12px" }}>
+                        {/* Stats row */}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 8 }}>
+                          {[
+                            ["Fill-ups", v.fills],
+                            ["Litres", v.litres.toFixed(1) + "L"],
+                            [hb ? "Hours" : "KM", v.km > 0 ? v.km.toLocaleString() : "\u2014"],
+                            ["Drivers", [...v.drivers].join(", ") || "\u2014"],
+                          ].map(([lbl, val]) => (
+                            <div key={lbl} style={{ fontSize: 10 }}>
+                              <span style={{ color: "#94a3b8", fontWeight: 500 }}>{lbl}: </span>
+                              <span style={{ color: "#374151", fontWeight: 600 }}>{val}</span>
+                            </div>
+                          ))}
+                        </div>
+                        {/* Transaction list */}
+                        {v.entries && v.entries.length > 0 && (
+                          <div style={{ overflowX: "auto", marginBottom: 6 }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                              <thead>
+                                <tr style={{ background: "#f1f5f9" }}>
+                                  {["Date", "Driver", "Station", "Litres", "$/L", "Cost", hb ? "Hours" : "Odo"].map(h => (
+                                    <th key={h} style={{ padding: "4px 6px", textAlign: "left", fontWeight: 600, color: "#64748b", borderBottom: "1px solid #e2e8f0", whiteSpace: "nowrap" }}>{h}</th>
+                                  ))}
+                                  <th style={{ padding: "4px 6px", borderBottom: "1px solid #e2e8f0" }}></th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {v.entries.sort((a, b) => {
+                                  const da = parseDate(a.date), db = parseDate(b.date);
+                                  return (db || new Date(0)) - (da || new Date(0));
+                                }).map(e => (
+                                  <tr key={e.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                                    <td style={{ padding: "4px 6px", color: "#374151", whiteSpace: "nowrap" }}>{e.date || "\u2014"}</td>
+                                    <td style={{ padding: "4px 6px", color: "#374151" }}>{e.driverName || "\u2014"}</td>
+                                    <td style={{ padding: "4px 6px", color: "#64748b" }}>{e.station || "\u2014"}</td>
+                                    <td style={{ padding: "4px 6px", color: "#374151" }}>{e.litres ? e.litres + "L" : "\u2014"}</td>
+                                    <td style={{ padding: "4px 6px", color: "#374151" }}>{e.pricePerLitre ? "$" + e.pricePerLitre : "\u2014"}</td>
+                                    <td style={{ padding: "4px 6px", fontWeight: 600, color: "#16a34a" }}>{e.totalCost ? "$" + e.totalCost.toFixed(2) : "\u2014"}</td>
+                                    <td style={{ padding: "4px 6px", color: "#374151" }}>{e.odometerReading || "\u2014"}</td>
+                                    <td style={{ padding: "4px 6px", display: "flex", gap: 4 }}>
+                                      {e.receiptImage && (
+                                        <button onClick={(ev) => { ev.stopPropagation(); setReceiptViewerEntry(e); }} style={{
+                                          padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600,
+                                          background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe", cursor: "pointer",
+                                        }}>{"\uD83D\uDDBC\uFE0F"}</button>
+                                      )}
+                                      <button onClick={(ev) => { ev.stopPropagation(); setEditEntry(e); }} style={{
+                                        padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600,
+                                        background: "#fefce8", color: "#854d0e", border: "1px solid #fde047", cursor: "pointer",
+                                      }}>{"\u270F\uFE0F"}</button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        <button onClick={() => { setActiveTab("data"); setSearchTerm(v.rego); }} style={{
+                          padding: "4px 10px", borderRadius: 6, fontSize: 10, fontWeight: 600,
+                          background: "white", color: "#2563eb", border: "1px solid #bfdbfe", cursor: "pointer",
+                        }}>View full history {"\u2192"}</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
           );
