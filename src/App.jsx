@@ -2725,6 +2725,7 @@ export default function App() {
   const [aiFlagsFilter, setAiFlagsFilter] = useState("open"); // separate filter for AI flags modal
   const [replyingFlag, setReplyingFlag] = useState(null); // flagId currently being responded to
   const [flagsRegoSearch, setFlagsRegoSearch] = useState(""); // rego search in flags modal
+  const [flagDetailPopup, setFlagDetailPopup] = useState(null); // { flag, x, y } for inline flag detail popup
   const [expandedReceipt, setExpandedReceipt] = useState(null); // flagId or entryId whose receipt is shown inline
   const [editingEntry, setEditingEntry] = useState(null); // entry object being edited
   const [vehicleMenu, setVehicleMenu] = useState(null); // rego string for open menu
@@ -6493,7 +6494,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                       return (
                         <div key={rego} style={{ marginBottom: 16, position: "relative" }}>
                           {/* Vehicle header */}
-                          <div onClick={() => setExpandedRego(isExpanded ? null : rego)}
+                          <div onClick={() => { setExpandedRego(isExpanded ? null : rego); setFlagDetailPopup(null); }}
                             className={showOverdueHighlight ? "svc-overdue" : ""}
                             style={{
                               background: "white",
@@ -6503,9 +6504,21 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", letterSpacing: "0.03em" }}>{rego}</span>
-                                {dangerCount > 0 && <span onClick={(ev) => { ev.stopPropagation(); setShowFlags(true); setFlagsFilter("open"); }} className="flag-badge flag-danger" style={{ cursor: "pointer" }}>{"\u26A0"} {dangerCount}</span>}
-                                {warnCount > 0 && <span onClick={(ev) => { ev.stopPropagation(); setShowFlags(true); setFlagsFilter("open"); }} className="flag-badge flag-warn" style={{ cursor: "pointer" }}>{"\u26A1"} {warnCount}</span>}
-                                {aiCount > 0 && <span onClick={(ev) => { ev.stopPropagation(); setShowAiFlags(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: 10, fontSize: 10, fontWeight: 700, background: "#ede9fe", color: "#7c3aed", border: "1px solid #c4b5fd", cursor: "pointer" }}>{"\uD83E\uDD16"} {aiCount}</span>}
+                                {dangerCount > 0 && <span onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  const dangerFlags = openVehicleFlags.filter(f => f.category === "ops" && f.type === "danger");
+                                  setFlagDetailPopup(prev => prev?.rego === rego && prev?.filterType === "danger" ? null : { rego, flags: dangerFlags, filterType: "danger" });
+                                }} className="flag-badge flag-danger" style={{ cursor: "pointer" }}>{"\u26A0"} {dangerCount}</span>}
+                                {warnCount > 0 && <span onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  const warnFlags = openVehicleFlags.filter(f => f.category === "ops" && f.type === "warn");
+                                  setFlagDetailPopup(prev => prev?.rego === rego && prev?.filterType === "warn" ? null : { rego, flags: warnFlags, filterType: "warn" });
+                                }} className="flag-badge flag-warn" style={{ cursor: "pointer" }}>{"\u26A1"} {warnCount}</span>}
+                                {aiCount > 0 && <span onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  const aiFlags = openVehicleFlags.filter(f => f.category === "ai" && (f.type === "danger" || f.type === "warn"));
+                                  setFlagDetailPopup(prev => prev?.rego === rego && prev?.filterType === "ai" ? null : { rego, flags: aiFlags, filterType: "ai" });
+                                }} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: 10, fontSize: 10, fontWeight: 700, background: "#ede9fe", color: "#7c3aed", border: "1px solid #c4b5fd", cursor: "pointer" }}>{"\uD83E\uDD16"} {aiCount}</span>}
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 {vehicleTotalCost > 0 && <span style={{ fontSize: 13, fontWeight: 700, color: "#16a34a" }}>${vehicleTotalCost.toFixed(2)}</span>}
@@ -6529,6 +6542,40 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                               )}
                             </div>
                           </div>
+
+                          {/* Flag detail popup */}
+                          {flagDetailPopup?.rego === rego && (
+                            <div onClick={ev => ev.stopPropagation()} className="fade-in" style={{
+                              background: flagDetailPopup.filterType === "ai" ? "#faf5ff" : flagDetailPopup.filterType === "danger" ? "#fef2f2" : "#fffbeb",
+                              border: `1px solid ${flagDetailPopup.filterType === "ai" ? "#c4b5fd" : flagDetailPopup.filterType === "danger" ? "#fca5a5" : "#fcd34d"}`,
+                              borderRadius: 8, padding: "10px 12px", margin: "6px 0",
+                            }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                                <span style={{ fontSize: 12, fontWeight: 700, color: flagDetailPopup.filterType === "ai" ? "#7c3aed" : flagDetailPopup.filterType === "danger" ? "#b91c1c" : "#92400e" }}>
+                                  {flagDetailPopup.filterType === "ai" ? "\uD83E\uDD16 AI Scan Issues" : flagDetailPopup.filterType === "danger" ? "\u26A0 Issues" : "\u26A1 Warnings"} — {rego}
+                                </span>
+                                <button onClick={(ev) => { ev.stopPropagation(); setFlagDetailPopup(null); }} style={{
+                                  background: "none", border: "none", cursor: "pointer", color: "#94a3b8", fontSize: 16, lineHeight: 1,
+                                }}>{"\u00D7"}</button>
+                              </div>
+                              {flagDetailPopup.flags.map((f, fi) => (
+                                <div key={fi} style={{
+                                  background: "white", borderRadius: 6, padding: "8px 10px", marginBottom: fi < flagDetailPopup.flags.length - 1 ? 6 : 0,
+                                  border: `1px solid ${flagDetailPopup.filterType === "ai" ? "#e9d5ff" : flagDetailPopup.filterType === "danger" ? "#fecaca" : "#fde68a"}`,
+                                }}>
+                                  <div style={{ fontSize: 11, fontWeight: 700, color: "#0f172a", marginBottom: 3 }}>
+                                    {f.text}
+                                    {f.entryDate && <span style={{ fontWeight: 400, color: "#94a3b8", marginLeft: 6 }}>{f.entryDate}</span>}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.4 }}>{f.detail}</div>
+                                  {f.odo && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 3 }}>Odo: {f.odo.toLocaleString()}</div>}
+                                </div>
+                              ))}
+                              {flagDetailPopup.flags.length === 0 && (
+                                <div style={{ fontSize: 11, color: "#94a3b8", textAlign: "center", padding: 8 }}>No issues found</div>
+                              )}
+                            </div>
+                          )}
 
                           {/* 3-dot dropdown menu */}
                           {vehicleMenu === rego && (
@@ -6719,12 +6766,16 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                 </div>
                               </div>
 
-                              {/* Flags summary */}
+                              {/* Flags summary — clickable to show details */}
                               {vehicleFlags.length > 0 && (
                                 <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
                                   {vehicleFlags.map((f, fi) => (
-                                    <div key={fi} className={`flag-badge flag-${f.type}`} title={f.detail}>
-                                      {f.type === "danger" ? "\u26A0" : f.type === "warn" ? "\u26A1" : f.type === "info" ? "\u2139" : "\u2713"}{" "}
+                                    <div key={fi} className={`flag-badge flag-${f.type}`}
+                                      onClick={() => setFlagDetailPopup(prev =>
+                                        prev?.rego === rego && prev?._singleIdx === fi ? null : { rego, flags: [f], filterType: f.category === "ai" ? "ai" : f.type, _singleIdx: fi }
+                                      )}
+                                      style={{ cursor: "pointer" }}>
+                                      {f.type === "danger" ? "\u26A0" : f.type === "warn" ? "\u26A1" : f.category === "ai" ? "\uD83E\uDD16" : f.type === "info" ? "\u2139" : "\u2713"}{" "}
                                       {f.text}
                                       {f.entryDate && <span style={{ opacity: 0.7, marginLeft: 3 }}>({f.entryDate})</span>}
                                     </div>
