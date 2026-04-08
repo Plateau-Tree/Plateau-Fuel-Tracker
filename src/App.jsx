@@ -324,6 +324,14 @@ function getDisplayLabel(vehicleType, division) {
 }
 
 // ─── Utilities ─────────────────────────────────────────────────────────────
+
+// Format fleet card number for display: "7034305110028204" → "7034 3051 1002 8204"
+const formatCardNumber = (num) => {
+  if (!num) return "";
+  const digits = String(num).replace(/\s/g, "");
+  return digits.replace(/(.{4})(?=.)/g, "$1 ");
+};
+
 // ─── Driver Fleet Card Database (from fleet card spreadsheet) ───────────
 const DRIVER_CARDS = [
 {n:"KYLE OSBORNE",c:"7034305113700650",r:"AP85DF"},{n:"JASON SORBARA",c:"7034305108940667",r:"AT13VE"},{n:"NAISH",c:"7034305107330928",r:"BF51KJ"},{n:"JUSTIN LEWIS",c:"7034305116558659",r:"BJ57HC"},{n:"NICK JONES",c:"7034305115783134",r:"BR22ZZ"},{n:"JASON HUGHES",c:"7034305105574238",r:"BT08QM"},{n:"BRENDAN RICHARDSON",c:"7034305110165261",r:"BY38KR"},{n:"LUKE BARTLEY",c:"7034305106436460",r:"CA10BL"},{n:"BILLY PRICE",c:"7034305113893588",r:"CC24TI"},{n:"GAB FITZGERALD",c:"7034305111758833",r:"CC94JL"},{n:"JOE HUTTON",c:"7034305106228180",r:"CD36PH"},{n:"RACHAEL KEATING",c:"7034305106786955",r:"CH90KL"},{n:"DANIEL THOMSON",c:"7034305108274448",r:"CH95ZD"},{n:"KYLE OSBORNE",c:"7034305109332146",r:"CI98BZ"},{n:"KEV CARRILLO",c:"7034305108260140",r:"CJ55FB"},{n:"DAN THOMPSON",c:"7034305107310136",r:"CL52NS"},{n:"BILLY PRICE",c:"7034305116027192",r:"CM77KG"},{n:"CHRIS PLAYER",c:"7034305117020659",r:"CN47HS"},{n:"SHAUN COLE",c:"7034305113746059",r:"CP60AF"},{n:"DENNIS KOCJANCIC",c:"7034305116296961",r:"CP06YZ"},{n:"SHANE DEMIRAL",c:"7034305112151236",r:"CT74KE"},{n:"SAXON",c:"7034305106890443",r:"CV14NO"},{n:"LAURA HARDWOOD",c:"7034305114887118",r:"CX22BE"},{n:"MICK THOMAS",c:"7034305106791179",r:"CX23BE"},{n:"JAYDEN STRONG",c:"7034305112823891",r:"DB78SC"},{n:"KYLE OSBORNE",c:"7034305111704035",r:"DF25LB"},{n:"JACOB DEVEIGNE",c:"7034305110028204",r:"DF26LB"},{n:"ALEX GLYNN",c:"7034305112341555",r:"DI05QD"},{n:"DAMIAN SEMPEL",c:"7034305116822212",r:"CS63LP"},{n:"JACOB DEVEIGNE",c:"7034305117003408",r:"DP60DA"},{n:"BRETT SONTER",c:"7034305108863984",r:"DPL85C"},{n:"TIM PRICE",c:"7034305114660168",r:"DP90CQ"},{n:"JASON HUGHES",c:"7034305112129919",r:"DSU65Y"},{n:"PHIL CARSON",c:"7034305108545714",r:"DSU65Y"},{n:"SONYA",c:"7034305114570151",r:"EAE28V"},{n:"SAM LAW",c:"7034305113442394",r:"EBL30C"},{n:"AMELIA PLUMMER",c:"7034305115642942",r:"ECE83U"},{n:"LEE DAVIS",c:"7034305107318832",r:"EES53B"},{n:"JOE PELLIZZON",c:"7034305117257665",r:"EYO62W"},{n:"JOHN LARGEY",c:"7034305111069538",r:"EOL97X"},{n:"MARTIN HOWARD",c:"7034305113441354",r:"EQE85L"},{n:"BJ",c:"7034305110325493",r:"EQP77D"},{n:"JOE HURST",c:"7034305112846991",r:"EQP77E"},{n:"RHYS DWYER",c:"7034305109386829",r:"ERQ21S"},{n:"ANT YOUNGMAN",c:"7034305105562266",r:"EVA47B"},{n:"DECLAN KANE",c:"7034305107192484",r:"EYN61Z"},{n:"DAYNE COOMBE",c:"7034305107009274",r:"EYO02K"},{n:"CASS CHAPPLE",c:"7034305107286914",r:"EYP02J"},{n:"DANE PLUMMER",c:"7034305116249275",r:"FGP29X"},{n:"TONY PLUMMER",c:"7034305111220834",r:"FHX25L"},{n:"JOE DALEY",c:"7034305116246156",r:"FMT17H"},{n:"JASON JOHNSON",c:"7034305113817595",r:"JCJ010"},{n:"CAM WILLIAMS",c:"7034305117354637",r:"MISC3"},{n:"CARLOS CARRILLO",c:"7034305115254565",r:"WIA53F"},{n:"WADE HANNELL",c:"7034305116506179",r:"WNU522"},{n:"OLD BOGIE",c:"7034305111430383",r:"XN56BU"},{n:"NATHAN MORALES",c:"7034305110311667",r:"XN59QZ"},{n:"SCOTT WOOD",c:"7034305110006994",r:"XN95CF"},{n:"ALEX GLYNN",c:"7034305116398783",r:"XO05MA"},{n:"MATTHEW BROCK",c:"7034305108678176",r:"XO05RX"},{n:"MATT ROGERS",c:"7034305111375786",r:"XO08FN"},{n:"MAROS MENCAK",c:"7034305111698906",r:"XO20NL"},{n:"TIM PRICE",c:"7034305113655797",r:"XO49LN"},{n:"SHAUN DENNISON",c:"7034305110811948",r:"XO96XP"},{n:"STEVE NEWTON",c:"7034305111299762",r:"XP058N"},{n:"DOUG GRANT",c:"7034305116197722",r:"XP31AG"},{n:"JASON HUGHES",c:"7034305116247253",r:"XP41MC"},{n:"JASON SORBARA",c:"7034305117860930",r:"XP86LM"},{n:"ROGER BORG",c:"7034305106723230",r:"YMN14E"},{n:"MATHEW BROCK",c:"7034305108678176",r:"XO05RX"}
@@ -2119,7 +2127,7 @@ function ManualEntryModal({ rego, division, vehicleType, onSave, onClose }) {
           <FieldInput label="Station" value={f.station} onChange={v => set("station", v)} placeholder="e.g. Ampol" />
           <FieldInput label="Fuel Type" value={f.fuelType} onChange={v => set("fuelType", v)} placeholder="e.g. Diesel" />
         </div>
-        <FieldInput label="Fleet Card Number" value={f.fleetCardNumber} onChange={v => set("fleetCardNumber", v)} placeholder="Optional" />
+        <FieldInput label="Fleet Card Number" value={formatCardNumber(f.fleetCardNumber)} onChange={v => set("fleetCardNumber", v.replace(/\s/g, ""))} placeholder="Optional" />
 
         <div style={{ marginTop: 8 }}>
           <PrimaryBtn onClick={() => {
@@ -4957,7 +4965,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <div>
               <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Card Number</label>
-              <input value={manualCardNum} onChange={e => setManualCardNum(e.target.value)} placeholder="e.g. 7034 3051 1700 2350"
+              <input value={formatCardNumber(manualCardNum)} onChange={e => setManualCardNum(e.target.value.replace(/\s/g, ""))} placeholder="e.g. 7034 3051 1700 2350"
                 style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
                 onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
             </div>
@@ -5033,7 +5041,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
             <div>
               <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Card Number</label>
-              <input value={manualReceipt.cardNumber} onChange={e => setManualReceipt(r => ({ ...r, cardNumber: e.target.value }))} placeholder="e.g. 7034 3051 1700 2350"
+              <input value={formatCardNumber(manualReceipt.cardNumber)} onChange={e => setManualReceipt(r => ({ ...r, cardNumber: e.target.value.replace(/\s/g, "") }))} placeholder="e.g. 7034 3051 1700 2350"
                 style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
                 onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
             </div>
@@ -5227,7 +5235,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               { label: "Division", val: otherForm.division, set: v => setOtherForm(f => ({...f, division: v})) },
               { label: "Equipment", val: otherForm.equipment, set: v => setOtherForm(f => ({...f, equipment: v})) },
               { label: "Station", val: otherForm.station || receiptData?.station || "", set: v => setOtherForm(f => ({...f, station: v})) },
-              { label: "Fleet Card", val: cardData?.cardNumber || otherForm.fleetCard || "", set: v => {
+              { label: "Fleet Card", val: formatCardNumber(cardData?.cardNumber || otherForm.fleetCard || ""), set: v => {
                 const cleanCard = v.replace(/\s/g, "");
                 setCardData(d => ({...(d || {}), cardNumber: cleanCard}));
                 const rego = cardData?.vehicleOnCard || otherForm.cardRego;
@@ -5364,7 +5372,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     ];
 
     const cardRows = [
-      { label: "Card Number", val: cardData?.cardNumber || regoMatch?.c || "", set: v => {
+      { label: "Card Number", val: formatCardNumber(cardData?.cardNumber || regoMatch?.c || ""), set: v => {
         const cleanCard = v.replace(/\s/g, "");
         setCardData(d => ({...(d || {}), cardNumber: cleanCard}));
         // Learn this card ↔ rego association + raw AI misread mapping
@@ -5612,7 +5620,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               </div>
               {isLow && cardData?._originalCard && (
                 <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 4 }}>
-                  AI read: card "{cardData._originalCard}"{cardData._originalRego ? `, rego "${cardData._originalRego}"` : ""} — auto-corrected to closest match
+                  AI read: card "{formatCardNumber(cardData._originalCard)}"{cardData._originalRego ? `, rego "${cardData._originalRego}"` : ""} — auto-corrected to closest match
                 </div>
               )}
               {cardData?._confusableRegos && (
@@ -6859,7 +6867,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                             <td style={{ fontWeight: 500, color: "#374151" }}>{e.driverName || "\u2014"}</td>
                             <td style={{ fontWeight: 600, color: divColor.text }}>{e.equipment || "\u2014"}</td>
                             <td style={{ color: "#64748b" }}>{e.station || "\u2014"}</td>
-                            <td style={{ color: "#374151", fontSize: 10 }}>{e.fleetCardNumber || "\u2014"}</td>
+                            <td style={{ color: "#374141", fontSize: 10 }}>{formatCardNumber(e.fleetCardNumber) || "\u2014"}</td>
                             <td style={{ fontWeight: 600, color: "#374151" }}>{e.cardRego || "\u2014"}</td>
                             <td style={{ color: "#374151" }}>{e.date || "\u2014"}</td>
                             <td style={{ color: "#374151" }}>{e.litres ? `${e.litres}L` : "\u2014"}</td>
@@ -8825,7 +8833,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                         </div>
                         {txn.station && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{txn.station}</div>}
                         {txn.product && <div style={{ fontSize: 10, color: "#94a3b8" }}>{txn.product}</div>}
-                        {txn.cardNumber && <div style={{ fontSize: 9, color: "#cbd5e1", marginTop: 2, fontFamily: "monospace" }}>{txn.cardNumber}</div>}
+                        {txn.cardNumber && <div style={{ fontSize: 9, color: "#cbd5e1", marginTop: 2, fontFamily: "monospace" }}>{formatCardNumber(txn.cardNumber)}</div>}
                       </div>
 
                       {entry ? (
@@ -9095,7 +9103,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600, width: 55 }}>Card #:</span>
-                        <input value={editingCard.newCard} onChange={e => setEditingCard(p => ({ ...p, newCard: e.target.value.replace(/\s/g, "") }))}
+                        <input value={formatCardNumber(editingCard.newCard)} onChange={e => setEditingCard(p => ({ ...p, newCard: e.target.value.replace(/\s/g, "") }))}
                           style={{ flex: 1, padding: "4px 8px", borderRadius: 5, border: "1px solid #fdba74", fontSize: 12, fontFamily: "inherit", outline: "none", color: "#0f172a" }} />
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -9114,7 +9122,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                   ) : (
                     <>
                       <div style={{ fontSize: 14, fontWeight: 700, color: "#c2410c", display: "flex", alignItems: "center", gap: 6 }}>
-                        {"\uD83D\uDCB3"} ...{c.card.slice(-6)}
+                        {"\uD83D\uDCB3"} {formatCardNumber(c.card)}
                         {isAdmin && (
                           <button onClick={() => setEditingCard({ oldCard: c.card, newCard: c.card, newRego: [...c.regos].join(", ") })}
                             title="Edit card details" style={{ background: "none", border: "none", color: "#c2410c", cursor: "pointer", fontSize: 12, padding: "0 4px", opacity: 0.6 }}>{"\u270E"}</button>
