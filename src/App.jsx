@@ -544,8 +544,19 @@ SECTION C — FUEL ENTRIES (the most critical section):
 This section contains fuel purchase information in a roughly columnar format. Each fuel entry is spread across 1 or 2 lines. The columns are typically:
   Column 1: Fuel name/type (e.g. "DIESEL", "UNLEADED", "PREMIUM 95")
   Column 2: Quantity in litres (e.g. "45.23" or "45.23L") — typically between 10L and 450L
-  Column 3: Price per litre (e.g. "2.829" or "2.829$/L") — typically between $1.40 and $4.00
-  Column 4: Subtotal cost for this line (e.g. "127.96") — this is the HIGHEST number on the line
+  Column 3: Price per litre (e.g. "2.829" or "2.829$/L") — ALWAYS between $1.40 and $4.00 in Australia
+  Column 4: Subtotal cost for this line (e.g. "127.96") — this is the HIGHEST number on the line, usually 10×–400× the PPL
+
+⚠️ THE #1 MISTAKE TO AVOID — CONFUSING SUBTOTAL WITH PRICE PER LITRE ⚠️
+The price per litre (PPL) is a SMALL NUMBER (between 1.40 and 4.00 dollars). It typically sits DIRECTLY NEXT TO the fuel name — often on the same row or the row below. It is NOT the total cost and NOT the subtotal.
+  - PPL correct examples: 1.899, 2.329, 2.749, 3.299, 3.499 (values between 1.40 and 4.00)
+  - PPL correct in "cents" format: 189.9, 232.9, 274.9, 329.9 (values between 140.0 and 400.0 — divide by 100 to get dollars)
+  - NEVER pick a PPL value: 45.80, 141.56, 145.80, 220.02, 383.01 (these are SUBTOTALS, not prices per litre)
+  - NEVER pick a PPL value: any number >$4.01/L after dividing cents by 100, any number <$1.39/L
+
+HARD RULE: If the value you are about to report as pricePerLitre is OUTSIDE the range $1.40–$4.00 (or 140–400 if printed in cents), you have picked the wrong number. STOP. Re-read the receipt. Find the small number next to the fuel name that IS in this range — THAT is the PPL. The larger number you were about to pick is almost certainly the line subtotal or the grand total.
+
+CROSS-CHECK BEFORE RETURNING: For every fuel line, verify litres × pricePerLitre ≈ subtotal_cost. If the product is >20% off the printed subtotal, you have misread one of the three numbers — re-read them before returning.
 
 If a fuel entry spans 2 lines, the format is often:
   Line A: "1 FUEL TYPE NAME          $SUBTOTAL_COST  B"
@@ -665,7 +676,8 @@ RULES
 - AdBlue is NOT fuel — it MUST go in "otherItems", NEVER in "lines". Same for DEF.
 - CROSS-CHECK EVERY PRODUCT: litres × pricePerLitre ≈ cost. If it doesn't match, RE-READ the digits from the image first. Only use reverse calculation if you genuinely cannot make out a digit.
 - "digitsCertain" per line: set to true if you could clearly read all digits for that line. Set to false if any digit was blurry, ambiguous, or you had to use reverse calculation to resolve it. When digitsCertain is false, the system may use cross-checking math to validate your values.
-- pricePerLitre must be in DOLLARS, not cents. If value is 100-400 range, DIVIDE BY 100. Example: "274.9 c/L" = 2.749 $/L.
+- pricePerLitre must be in DOLLARS ($1.40–$4.00 range). If the printed value is in cents (140–400 range), DIVIDE BY 100. Example: "274.9 c/L" = 2.749 $/L.
+- ⚠️ NEVER report a pricePerLitre outside $1.40–$4.00 (dollars) or 140–400 (cents). Any value outside these bands is NOT a PPL — it's a subtotal, total, or pump/transaction number you misidentified. Go back and find the correct small number next to the fuel name.
 - Each line MUST have its OWN fuelType and pricePerLitre. Do NOT copy values between lines.
 - "otherItems" uses EXACT description as printed. Empty array [] if none. Ignore surcharges/fees.
 - "litres" is the total of fuel lines ONLY.
@@ -922,14 +934,59 @@ function normalizeReceiptData(data, learnedCorrections) {
     }
   }
 
-  // Fix price per litre if reported in cents instead of dollars (e.g. 274.9 instead of 2.749)
-  if (data.pricePerLitre && data.pricePerLitre > 10) {
-    data.pricePerLitre = Math.round((data.pricePerLitre / 100) * 10000) / 10000;
-  }
-  data.lines = data.lines.map(line => {
-    if (line.pricePerLitre && line.pricePerLitre > 10) {
-      line.pricePerLitre = Math.round((line.pricePerLitre / 100) * 10000) / 10000;
+  // ── PPL sanity correction ──
+  // Australian retail PPL is ALWAYS between $1.40 and $4.00/L.
+  // Some receipts print it in cents (274.9) — divide by 100 to get dollars (2.749).
+  // But if the AI grabbed a SUBTOTAL (e.g. 141.56) by mistake, dividing by 100 gives
+  // a plausible-looking but wrong PPL (1.4156). Defend against that by comparing
+  // the claimed PPL to what cost÷litres implies, and preferring the latter when
+  // cost÷litres lands cleanly in the $1.40–$4.00 band.
+  const PPL_MIN = 1.40, PPL_MAX = 4.00;
+  const pplFromCostLitres = (c, l) => (c > 0 && l > 0) ? (c / l) : null;
+  const inPplBand = (v) => v != null && v >= PPL_MIN && v <= PPL_MAX;
+
+  const correctPpl = (reported, cost, litres, context) => {
+    if (reported == null) return { value: null, note: null };
+    // Try both as-is and /100 interpretations
+    const asIs = reported;
+    const asCents = reported > 10 ? reported / 100 : null;
+    const implied = pplFromCostLitres(cost, litres);
+
+    // If cost/litres gives a clean in-band PPL, treat it as the truth
+    if (inPplBand(implied)) {
+      const rounded = Math.round(implied * 10000) / 10000;
+      // AI value matches implied (within 1c) → trust AI value directly
+      if (Math.abs(asIs - implied) < 0.015) return { value: asIs, note: null };
+      if (asCents != null && Math.abs(asCents - implied) < 0.015) return { value: Math.round(asCents * 10000) / 10000, note: null };
+      // AI value doesn't match → it picked the wrong number; use implied PPL
+      return { value: rounded, note: `${context}: PPL ${reported} looked wrong (cost/litres implies $${rounded}/L) — corrected from printed subtotal.` };
     }
+    // No reliable cost÷litres → fall back to range-based interpretation
+    if (inPplBand(asIs)) return { value: asIs, note: null };
+    if (inPplBand(asCents)) return { value: Math.round(asCents * 10000) / 10000, note: null };
+    // Can't validate → null it out rather than keep a garbage number
+    return { value: null, note: `${context}: PPL ${reported} outside valid $1.40–$4.00 range — cleared for manual review.` };
+  };
+
+  data._mathIssues = data._mathIssues || [];
+  // Top-level PPL (best-effort — use overall totals if we have them)
+  {
+    const { value, note } = correctPpl(data.pricePerLitre, data.totalCost, data.litres, "Receipt");
+    if (value !== data.pricePerLitre) {
+      if (data.pricePerLitre != null) data._originalPpl = data.pricePerLitre;
+      data.pricePerLitre = value;
+    }
+    if (note) data._mathIssues.push(note);
+  }
+  // Per-line PPL — use per-line cost/litres (much more accurate than totals)
+  data.lines = data.lines.map((line, idx) => {
+    const { value, note } = correctPpl(line.pricePerLitre, line.cost, line.litres, `Line ${idx + 1}`);
+    if (value !== line.pricePerLitre) {
+      if (line.pricePerLitre != null) line._originalPpl = line.pricePerLitre;
+      line.pricePerLitre = value;
+      if (value != null) line._pplCorrected = true;
+    }
+    if (note) data._mathIssues.push(note);
     return line;
   });
 
