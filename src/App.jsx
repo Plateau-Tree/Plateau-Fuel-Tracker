@@ -263,7 +263,7 @@ const DIVISIONS = {
   Landscape: {
     label: "Landscape",
     color: { bg: "#faf5ff", text: "#7c3aed", border: "#c4b5fd", accent: "#7c3aed" },
-    types: ["Hired Vehicle", "Mower", "Trailer", "Landscape Tractor", "Ute", "Truck"],
+    types: ["Hired Vehicle", "Mower", "Trailer", "Landscape Tractor", "Ute", "Truck", "Other"],
   },
 };
 const DIVISION_KEYS = Object.keys(DIVISIONS);
@@ -4614,7 +4614,6 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     { label: "Jerry Can", icon: "\uD83D\uDEE2" },
     { label: "Fuel Cell/Pod", icon: "\u26FD" },
     { label: "Leaf Blower", icon: "\uD83C\uDF43" },
-    { label: "Stump Grinder", icon: "\u2699\uFE0F" },
     { label: "AdBlue", icon: "\uD83D\uDCA7" },
     { label: "Hire Equipment", icon: "\uD83D\uDD27" },
     { label: "2 Stroke Fuel", icon: "\u26FD" },
