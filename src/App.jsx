@@ -8005,13 +8005,15 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     // Per-vehicle breakdown for this period
     const periodByVehicle = {};
     periodVehicle.forEach(e => {
-      if (!periodByVehicle[e.registration]) periodByVehicle[e.registration] = { rego: e.registration, division: e.division, type: e.vehicleType, litres: 0, cost: 0, fills: 0, km: 0, drivers: new Set(), odos: [], entries: [] };
+      if (!periodByVehicle[e.registration]) periodByVehicle[e.registration] = { rego: e.registration, division: e.division, type: e.vehicleType, litres: 0, cost: 0, fills: 0, km: 0, drivers: new Set(), odos: [], entries: [], cardRegos: new Set() };
       periodByVehicle[e.registration].entries.push(e);
       periodByVehicle[e.registration].litres += e.litres || 0;
       periodByVehicle[e.registration].cost += e.totalCost || 0;
       periodByVehicle[e.registration].fills += 1;
       if (e.driverName) periodByVehicle[e.registration].drivers.add(e.driverName);
       if (e.odometer) periodByVehicle[e.registration].odos.push(e.odometer);
+      const cr = (e.cardRego || e.fleetCardVehicle || "").toUpperCase().replace(/\s+/g, "");
+      if (cr) periodByVehicle[e.registration].cardRegos.add(cr);
     });
     // Calculate KM from odometer range
     Object.values(periodByVehicle).forEach(v => {
@@ -8177,18 +8179,19 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
             // Summary sheet
             const summaryRows = [
-              ["Fleet Dashboard Report", "", "", "", "", "", "", range.label],
-              [`Period: ${dashPeriod.charAt(0).toUpperCase() + dashPeriod.slice(1)}`, "", "", "", "", "", "", `Generated: ${new Date().toLocaleDateString("en-AU")}`],
+              ["Fleet Dashboard Report", "", "", "", "", "", "", "", range.label],
+              [`Period: ${dashPeriod.charAt(0).toUpperCase() + dashPeriod.slice(1)}`, "", "", "", "", "", "", "", `Generated: ${new Date().toLocaleDateString("en-AU")}`],
               [],
-              ["Vehicle", "Division", "Type", "Fill-ups", "KM Travelled", "Litres", "Cost ($)", "Drivers"],
+              ["Vehicle Rego", "Fleet Card Rego", "Division", "Type", "Fill-ups", "KM Travelled", "Litres", "Cost ($)", "Drivers"],
             ];
             periodVehicles.forEach(v => {
-              summaryRows.push([v.rego, v.division, v.type, v.fills, v.km || "", Math.round(v.litres * 100) / 100, Math.round(v.cost * 100) / 100, [...v.drivers].join(", ")]);
+              const cardRegoStr = v.cardRegos ? [...v.cardRegos].filter(Boolean).join(" / ") : "";
+              summaryRows.push([v.rego, cardRegoStr, v.division, v.type, v.fills, v.km || "", Math.round(v.litres * 100) / 100, Math.round(v.cost * 100) / 100, [...v.drivers].join(", ")]);
             });
             summaryRows.push([]);
-            summaryRows.push(["TOTAL", "", "", periodFillUps, periodTotalKm || "", Math.round(periodLitres * 100) / 100, Math.round(periodSpend * 100) / 100, ""]);
+            summaryRows.push(["TOTAL", "", "", "", periodFillUps, periodTotalKm || "", Math.round(periodLitres * 100) / 100, Math.round(periodSpend * 100) / 100, ""]);
             summaryRows.push([]);
-            summaryRows.push(["Avg $/day", "", "", "", "", "", (() => {
+            summaryRows.push(["Avg $/day", "", "", "", "", "", "", (() => {
               if (dashPeriod === "daily") return Math.round(periodSpend * 100) / 100;
               if (dashPeriod === "weekly") return Math.round(periodSpend / 7 * 100) / 100;
               if (dashPeriod === "monthly") { const days = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0).getDate(); return Math.round(periodSpend / days * 100) / 100; }
@@ -8196,19 +8199,20 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             })(), ""]);
 
             const sws = XLSX.utils.aoa_to_sheet(summaryRows);
-            sws["!cols"] = [{wch:14},{wch:12},{wch:14},{wch:10},{wch:12},{wch:10},{wch:12},{wch:30}];
+            sws["!cols"] = [{wch:14},{wch:14},{wch:12},{wch:14},{wch:10},{wch:12},{wch:10},{wch:12},{wch:30}];
             XLSX.utils.book_append_sheet(wb, sws, "Summary");
 
             // Individual entries sheet
             const entryRows = [
               ["All Entries — " + range.label],
               [],
-              ["Date", "Driver", "Registration", "Division", "Type", "Odometer", "Litres", "$/L", "Cost ($)", "Fuel Type", "Station", "Fleet Card"],
+              ["Date", "Driver", "Vehicle Rego", "Fleet Card Rego", "Division", "Type", "Odometer", "Litres", "$/L", "Cost ($)", "Fuel Type", "Station", "Fleet Card #"],
             ];
             periodEntries.forEach(e => {
               entryRows.push([
                 e.date || "", e.driverName || "",
                 e.entryType === "other" ? (e.equipment || "Other") : (e.registration || ""),
+                e.cardRego || e.fleetCardVehicle || "",
                 e.division || "", e.vehicleType || e.entryType || "",
                 e.odometer || "", e.litres || "", e.pricePerLitre || "",
                 e.totalCost ? Math.round(e.totalCost * 100) / 100 : "",
@@ -8216,7 +8220,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               ]);
             });
             const ews = XLSX.utils.aoa_to_sheet(entryRows);
-            ews["!cols"] = [{wch:12},{wch:18},{wch:14},{wch:12},{wch:14},{wch:10},{wch:8},{wch:7},{wch:10},{wch:14},{wch:20},{wch:20}];
+            ews["!cols"] = [{wch:12},{wch:18},{wch:14},{wch:14},{wch:12},{wch:14},{wch:10},{wch:8},{wch:7},{wch:10},{wch:14},{wch:20},{wch:20}];
             XLSX.utils.book_append_sheet(wb, ews, "All Entries");
 
             // Other claims sheet if any
