@@ -1132,6 +1132,26 @@ function normalizeReceiptData(data, learnedCorrections) {
   return data;
 }
 
+// ─── Known card/rego exceptions ────────────────────────────────────────────
+// Real-world fleet cards that are embossed with a DIFFERENT rego than the
+// actual vehicle they belong to (database/admin errors that cannot be fixed
+// without re-issuing the physical card). These pairs are ALLOWED to coexist —
+// fuzzy-matching should NOT try to "correct" one to the other, and flagging
+// logic should mark them as "known exception" rather than a data-entry error.
+// Format: { cardRego, vehicleRego, driver, reason }
+const KNOWN_CARD_REGO_EXCEPTIONS = [
+  { cardRego: "WIA53F", vehicleRego: "EIA53F", driver: "Carlos Carillo", reason: "Fleet card embossed with wrong rego; physical card still in use" },
+];
+function isKnownCardRegoException(cardRego, vehicleRego) {
+  if (!cardRego || !vehicleRego) return null;
+  const cr = cardRego.toUpperCase().replace(/\s+/g, "");
+  const vr = vehicleRego.toUpperCase().replace(/\s+/g, "");
+  return KNOWN_CARD_REGO_EXCEPTIONS.find(e =>
+    (e.cardRego === cr && e.vehicleRego === vr) ||
+    (e.cardRego === vr && e.vehicleRego === cr)
+  ) || null;
+}
+
 // ─── Fuzzy Fleet Card Matching ──────────────────────────────────────────────
 // Compares a scanned value against known fleet cards/regos and auto-corrects
 // misreads. Uses "edit distance" — the number of character changes needed to
@@ -1191,6 +1211,25 @@ function smartMatchLinesToVehicles(vehicles, fuelLines) {
 
 function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMappings) {
   if (!scannedCard && !scannedRego) return { cardNumber: null, vehicleOnCard: null };
+
+  // Known card/rego exceptions — real-world cards embossed with a rego that
+  // differs from the actual vehicle. If the scanned rego matches one of these
+  // exceptions exactly, pass it through without fuzzy-correcting it.
+  if (scannedRego) {
+    const cleanScannedRego = scannedRego.toUpperCase().replace(/\s+/g, "").replace(/[^A-Z0-9]/g, "");
+    const exception = KNOWN_CARD_REGO_EXCEPTIONS.find(e => e.cardRego === cleanScannedRego);
+    if (exception) {
+      return {
+        cardNumber: scannedCard || null,
+        vehicleOnCard: cleanScannedRego,
+        _corrected: false,
+        _confidence: "high",
+        _knownException: exception,
+        _originalCard: scannedCard,
+        _originalRego: scannedRego,
+      };
+    }
+  }
 
   // ── Check learned corrections first (instant match from previous user edits) ──
   if (learnedCardMappings && Object.keys(learnedCardMappings).length > 0) {
@@ -2292,6 +2331,7 @@ function ManualEntryModal({ rego, division, vehicleType, onSave, onClose }) {
 function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
   const [f, setF] = useState({
     driverName: entry.driverName || "",
+    registration: entry.registration || "",
     date: entry.date || "",
     odometer: entry.odometer?.toString() || "",
     litres: entry.litres?.toString() || "",
@@ -2381,6 +2421,7 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
           <div style={{ flex: "1 1 360px", minWidth: 300, padding: "16px 24px 24px 24px" }}>
 
         <FieldInput label="Driver Name" value={f.driverName} onChange={v => set("driverName", v)} placeholder="Driver name" required />
+        <FieldInput label="Registration" value={f.registration} onChange={v => set("registration", v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} placeholder="e.g. EIA53F" required />
         <FieldInput label="Date" value={f.date} onChange={v => set("date", v)} placeholder="DD/MM/YYYY" required />
         <FieldInput label={isHoursBased(entry.vehicleType) ? "Hour Meter" : "Odometer"} value={f.odometer} onChange={v => set("odometer", v)} placeholder={isHoursBased(entry.vehicleType) ? "e.g. 4500" : "e.g. 154597"} type="number" required />
 
@@ -2446,6 +2487,7 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
               onSave({
                 ...entry,
                 driverName: f.driverName.trim(),
+                registration: f.registration.trim().toUpperCase(),
                 date: f.date.trim(),
                 odometer: parseFloat(f.odometer) || null,
                 litres: parseFloat(f.litres) || null,
@@ -2696,6 +2738,15 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
   const rego = entry.registration || "";
   if (rego && (rego.length < 4 || rego.length > 8)) {
     flags.push({ category: "ai", type: "warn", text: "Unusual rego format", detail: `"${rego}" — expected 4-8 characters` });
+  }
+
+  // Known card/rego exception — suppress mismatch warning and surface as info
+  const cardRego = entry.cardRego || entry.fleetCardVehicle || "";
+  if (cardRego && rego && cardRego.toUpperCase().replace(/\s+/g, "") !== rego.toUpperCase().replace(/\s+/g, "")) {
+    const exception = isKnownCardRegoException(cardRego, rego);
+    if (exception) {
+      flags.push({ category: "ai", type: "info", text: "Known card/rego exception", detail: `${exception.driver}: card embossed "${exception.cardRego}" but vehicle is "${exception.vehicleRego}" — ${exception.reason}` });
+    }
   }
 
   // Driver name looks suspicious
