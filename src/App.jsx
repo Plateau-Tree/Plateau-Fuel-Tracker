@@ -8836,22 +8836,41 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
 
             // Other claims sheet if any
             if (periodOther.length > 0) {
+              // Column layout (per spec):
+              // A Date · B Driver · C Equipment · D Fleetcard Rego · E Division
+              // F (blank) · G (blank) · H Litres · I $/L · J Cost ($)
+              // K (blank) · L Station · M Fleet Card Number · N Notes
               const oRows = [
                 ["Oil & Other Claims — " + range.label],
                 [],
-                ["Date", "Driver", "Division", "Equipment", "Station", "Fleet Card", "Card Rego", "Litres", "$/L", "Cost ($)", "Notes"],
+                ["Date", "Driver", "Equipment", "Fleetcard Rego", "Division",
+                 "", "", "Litres", "$/L", "Cost ($)",
+                 "", "Station", "Fleet Card Number", "Notes"],
               ];
               periodOther.forEach(e => {
                 oRows.push([
-                  e.date || "", e.driverName || "", e.division || "",
-                  e.equipment || "", e.station || "", e.fleetCardNumber || "",
-                  e.cardRego || "", e.litres || "", e.pricePerLitre || "",
-                  e.totalCost ? Math.round(e.totalCost * 100) / 100 : "",
-                  e.notes || "",
+                  e.date || "",                 // A
+                  e.driverName || "",           // B
+                  e.equipment || "",            // C
+                  e.cardRego || "",             // D
+                  e.division || "",             // E
+                  "",                           // F (blank)
+                  "",                           // G (blank)
+                  e.litres || "",               // H
+                  e.pricePerLitre || "",        // I (blank when not applicable)
+                  e.totalCost ? Math.round(e.totalCost * 100) / 100 : "", // J
+                  "",                           // K (blank)
+                  e.station || "",              // L
+                  e.fleetCardNumber || "",      // M
+                  e.notes || "",                // N
                 ]);
               });
               const ows = XLSX.utils.aoa_to_sheet(oRows);
-              ows["!cols"] = [{wch:12},{wch:18},{wch:12},{wch:25},{wch:20},{wch:20},{wch:10},{wch:8},{wch:7},{wch:10},{wch:30}];
+              ows["!cols"] = [
+                {wch:12},{wch:18},{wch:25},{wch:12},{wch:12},
+                {wch:6},{wch:6},{wch:8},{wch:7},{wch:10},
+                {wch:6},{wch:20},{wch:20},{wch:30},
+              ];
               XLSX.utils.book_append_sheet(wb, ows, "Oil & Others");
             }
 
