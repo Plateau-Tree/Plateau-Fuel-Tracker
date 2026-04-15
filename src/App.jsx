@@ -2787,6 +2787,22 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
               <FieldInput label="Station" value={f.station} onChange={v => set("station", v)} placeholder="e.g. Ampol Brookvale" />
               <FieldInput label="Fuel Type" value={f.fuelType} onChange={v => set("fuelType", v)} placeholder="e.g. Diesel" />
             </div>
+
+            {/* Fleet card fields — editable here so admins can fix unclear AI card reads */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <FieldInput
+                label="Fleet Card Number"
+                value={formatCardNumber(f.fleetCardNumber)}
+                onChange={v => set("fleetCardNumber", v.replace(/\s/g, ""))}
+                placeholder="16-digit card"
+              />
+              <FieldInput
+                label="Fleet Card Rego"
+                value={f.cardRego}
+                onChange={v => set("cardRego", v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 7))}
+                placeholder="e.g. EIA53F"
+              />
+            </div>
           </>
         ) : (
           <>
@@ -2832,6 +2848,20 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
             )}
 
             <FieldInput label="Station" value={f.station} onChange={v => set("station", v)} placeholder="e.g. BP Marsden Park" />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <FieldInput
+                label="Fleet Card Number"
+                value={formatCardNumber(f.fleetCardNumber)}
+                onChange={v => set("fleetCardNumber", v.replace(/\s/g, ""))}
+                placeholder="16-digit card"
+              />
+              <FieldInput
+                label="Fleet Card Rego"
+                value={f.cardRego}
+                onChange={v => set("cardRego", v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 7))}
+                placeholder="e.g. EIA53F"
+              />
+            </div>
             <FieldInput label="Notes" value={f.notes} onChange={v => set("notes", v)} placeholder="Description / context" />
           </>
         )}
@@ -2928,6 +2958,8 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
                   fuelType: f.fuelType.trim(),
                   division: f.division,
                   vehicleType: f.vehicleType,
+                  fleetCardNumber: f.fleetCardNumber.replace(/\s/g, "") || "",
+                  cardRego: (f.cardRego || "").toUpperCase().replace(/\s+/g, ""),
                   // Clear other-only fields
                   equipment: null,
                   linkedVehicle: null,
