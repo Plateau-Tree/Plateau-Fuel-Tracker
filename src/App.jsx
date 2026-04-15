@@ -3416,6 +3416,15 @@ export default function App() {
   const [editingCard, setEditingCard] = useState(null); // { oldCard, newCard, newDrivers, newRegos } for inline card header editing
   const [expandedFuelType, setExpandedFuelType] = useState(null);
   const [collapsedFleetGroups, setCollapsedFleetGroups] = useState({});
+  // Per-section collapse state on the Dashboard (persists via localStorage)
+  const [collapsedDashSections, setCollapsedDashSections] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("fuel_dash_collapsed") || "{}"); } catch (_) { return {}; }
+  });
+  const toggleDashSection = (key) => setCollapsedDashSections(prev => {
+    const next = { ...prev, [key]: !prev[key] };
+    try { localStorage.setItem("fuel_dash_collapsed", JSON.stringify(next)); } catch (_) {}
+    return next;
+  });
   const [worseningFilter, setWorseningFilter] = useState(false); // highlight worsening vehicles on dashboard
   const [overdueFilter, setOverdueFilter] = useState(false); // show overdue vehicles on dashboard
   const [approachingFilter, setApproachingFilter] = useState(false); // show approaching service vehicles on dashboard
@@ -8893,10 +8902,17 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             }
           });
 
+          const spendCollapsed = !!collapsedDashSections.vehicleSpend;
           return (
           <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden", marginBottom: 16 }}>
-            <div style={{ padding: "10px 14px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#374151" }}>{"\uD83D\uDE97"} Vehicle Spend — {range.label}</span>
+            <div style={{ padding: "10px 14px", background: "#f8fafc", borderBottom: spendCollapsed ? "none" : "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <button onClick={() => toggleDashSection("vehicleSpend")} style={{
+                background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit",
+                display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, color: "#374151",
+              }}>
+                <span style={{ fontSize: 10, color: "#94a3b8", transform: spendCollapsed ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.2s", display: "inline-block" }}>{"\u25BC"}</span>
+                {"\uD83D\uDE97"} Vehicle Spend — {range.label}
+              </button>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <select value={vehicleSpendSort} onChange={e => setVehicleSpendSort(e.target.value)} style={{
                   padding: "4px 8px", borderRadius: 6, fontSize: 11, fontWeight: 500,
@@ -8914,6 +8930,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                 }}>{"\uD83D\uDCE5"} Export</button>
               </div>
             </div>
+            {!spendCollapsed && (<>
             {/* Summary bar */}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12, padding: "10px 14px", borderBottom: "1px solid #e2e8f0", background: "#f0fdf4" }}>
               {[
@@ -9023,6 +9040,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                 );
               })}
             </div>
+            </>)}
           </div>
           );
         })()}
@@ -9033,14 +9051,23 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         )}
 
         {/* ── Other claims for this period ── */}
-        {periodOther.length > 0 && (
+        {periodOther.length > 0 && (() => {
+          const otherCollapsed = !!collapsedDashSections.oilOthers;
+          return (
           <div style={{ background: "white", border: "1px solid #fde047", borderRadius: 10, overflow: "hidden", marginBottom: 16 }}>
-            <div style={{ padding: "10px 14px", background: "#fefce8", borderBottom: "1px solid #fde047", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#854d0e" }}>{"\u26FD"} Oil & Other Claims — {range.label}</span>
+            <div style={{ padding: "10px 14px", background: "#fefce8", borderBottom: otherCollapsed ? "none" : "1px solid #fde047", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <button onClick={() => toggleDashSection("oilOthers")} style={{
+                background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit",
+                display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, color: "#854d0e",
+              }}>
+                <span style={{ fontSize: 10, color: "#a16207", transform: otherCollapsed ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.2s", display: "inline-block" }}>{"\u25BC"}</span>
+                {"\u26FD"} Oil & Other Claims — {range.label}
+              </button>
               <span style={{ fontSize: 11, color: "#854d0e", fontWeight: 500 }}>
                 {periodOther.length} claim{periodOther.length !== 1 ? "s" : ""} {"\u00B7"} ${periodOther.reduce((s, e) => s + (e.totalCost || 0), 0).toFixed(2)}
               </span>
             </div>
+            {!otherCollapsed && (
             <div style={{ overflowX: "auto" }}>
               <table className="data-table">
                 <thead>
@@ -9099,8 +9126,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                 </tbody>
               </table>
             </div>
+            )}
           </div>
-        )}
+          );
+        })()}
 
         {/* Alert cards */}
         <div className="kpi-grid-3" style={{ marginBottom: 20 }}>
@@ -9336,6 +9365,19 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
 
         {/* Fleet table — grouped by division → vehicle type */}
         {(() => {
+          const fleetCollapsed = !!collapsedDashSections.fleetTable;
+          return (
+          <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden", marginBottom: 16 }}>
+            <div style={{ padding: "10px 14px", background: "#f8fafc", borderBottom: fleetCollapsed ? "none" : "1px solid #e2e8f0" }}>
+              <button onClick={() => toggleDashSection("fleetTable")} style={{
+                background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit",
+                display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, color: "#374151",
+              }}>
+                <span style={{ fontSize: 10, color: "#94a3b8", transform: fleetCollapsed ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.2s", display: "inline-block" }}>{"\u25BC"}</span>
+                {"\uD83D\uDE9B"} Fleet Overview
+              </button>
+            </div>
+            {!fleetCollapsed && (<div style={{ padding: 10 }}>{(() => {
           // Group sorted vehicles by division → vehicle type
           const groups = {};
           sorted.forEach(v => {
@@ -9527,6 +9569,9 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               </div>
             );
           });
+        })()}</div>)}
+          </div>
+          );
         })()}
 
         {/* Efficiency anomalies section */}
