@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { createClient } from "@supabase/supabase-js";
 
@@ -3421,6 +3421,7 @@ export default function App() {
   const [approachingFilter, setApproachingFilter] = useState(false); // show approaching service vehicles on dashboard
   const [vehicleSpendSort, setVehicleSpendSort] = useState("cost-desc");
   const [expandedSpendVehicle, setExpandedSpendVehicle] = useState(null); // rego expanded in spend section
+  const [expandedFleetVehicle, setExpandedFleetVehicle] = useState(null); // rego expanded in dashboard fleet table
   const [pendingExtraEntries, setPendingExtraEntries] = useState(null); // auto-detected extra receipt lines after submission
   const [showAddVehicleData, setShowAddVehicleData] = useState(false);
   const [dashPeriod, setDashPeriod] = useState("monthly"); // "daily" | "weekly" | "monthly" | "custom" | "all"
@@ -9053,6 +9054,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                     <th style={{ color: "#854d0e", borderBottom: "1px solid #fde047" }}>Cost</th>
                     <th style={{ color: "#854d0e", borderBottom: "1px solid #fde047" }}>Station</th>
                     <th style={{ color: "#854d0e", borderBottom: "1px solid #fde047" }}>Notes</th>
+                    <th style={{ color: "#854d0e", borderBottom: "1px solid #fde047" }}></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -9072,6 +9074,18 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                       <td style={{ fontWeight: 600, color: "#16a34a", fontSize: 11 }}>{e.totalCost ? `$${e.totalCost.toFixed(2)}` : "\u2014"}</td>
                       <td style={{ color: "#64748b", fontSize: 10 }}>{e.station || "\u2014"}</td>
                       <td style={{ color: "#64748b", fontSize: 10, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.notes || "\u2014"}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        {e.hasReceipt && (
+                          <button onClick={() => setViewingReceipt(e.id)} title="View receipt" style={{
+                            padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                            background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe", cursor: "pointer", marginRight: 3,
+                          }}>{"\uD83D\uDCC4"}</button>
+                        )}
+                        <button onClick={() => setEditingEntry(e)} title="Edit entry" style={{
+                          padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                          background: "#fefce8", color: "#854d0e", border: "1px solid #fde047", cursor: "pointer",
+                        }}>{"\u270F\uFE0F"}</button>
+                      </td>
                     </tr>
                   ))}
                   <tr style={{ background: "#fffbeb", borderTop: "2px solid #fde047" }}>
@@ -9080,7 +9094,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                     <td style={{ fontWeight: 700, color: "#854d0e" }}>{periodOther.reduce((s, e) => s + (e.litres || 0), 0) > 0 ? periodOther.reduce((s, e) => s + (e.litres || 0), 0).toFixed(1) + "L" : ""}</td>
                     <td></td>
                     <td style={{ fontWeight: 700, color: "#16a34a" }}>${periodOther.reduce((s, e) => s + (e.totalCost || 0), 0).toFixed(2)}</td>
-                    <td></td><td></td>
+                    <td></td><td></td><td></td>
                   </tr>
                 </tbody>
               </table>
@@ -9387,13 +9401,24 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                           {group.vehicles.map(v => {
                             const sc = svcColor(v.svcStatus);
                             const effRange = EFFICIENCY_RANGES[v.vt] || EFFICIENCY_RANGES.Other;
+                            const isRowExpanded = expandedFleetVehicle === v.rego;
+                            const vehicleEntries = entries
+                              .filter(e => e.entryType !== "other" && e.registration === v.rego)
+                              .sort(sortEntries);
+                            const hb = isHoursBased(v.vt);
                             return (
-                              <tr key={v.rego} style={{
-                                background: v.svcStatus === "overdue" ? "#fef2f2" : v.svcStatus === "approaching" ? "#fffdf5" : "white",
-                              }}>
+                              <React.Fragment key={v.rego}>
+                              <tr onClick={() => setExpandedFleetVehicle(isRowExpanded ? null : v.rego)}
+                                  style={{
+                                    background: v.svcStatus === "overdue" ? "#fef2f2" : v.svcStatus === "approaching" ? "#fffdf5" : (isRowExpanded ? "#f8fafc" : "white"),
+                                    cursor: "pointer",
+                                  }}>
                                 <td style={{ fontWeight: 700, color: "#0f172a" }}>
-                                  <div>{v.rego}</div>
-                                  {v.vehicleName && <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 400 }}>{v.vehicleName}</div>}
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <span style={{ fontSize: 10, color: "#94a3b8", transform: isRowExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s", display: "inline-block" }}>{"\u25BC"}</span>
+                                    <span>{v.rego}</span>
+                                  </div>
+                                  {v.vehicleName && <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 400, marginLeft: 16 }}>{v.vehicleName}</div>}
                                 </td>
                                 <td style={{ color: "#374151" }}>{v.latestOdo ? v.latestOdo.toLocaleString() : "\u2014"}</td>
                                 <td style={{ color: "#64748b", textAlign: "center" }}>{v.fillUps}</td>
@@ -9423,7 +9448,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                                 </td>
                                 <td>
                                   {v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")).length > 0 ? (
-                                    <span className="flag-badge flag-danger" style={{ fontSize: 9, cursor: "pointer" }} onClick={() => setShowFlags(true)}>
+                                    <span className="flag-badge flag-danger" style={{ fontSize: 9, cursor: "pointer" }} onClick={(ev) => { ev.stopPropagation(); setShowFlags(true); }}>
                                       {v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")).length}
                                     </span>
                                   ) : (
@@ -9431,6 +9456,53 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                                   )}
                                 </td>
                               </tr>
+                              {isRowExpanded && (
+                                <tr style={{ background: "#f8fafc" }}>
+                                  <td colSpan={9} style={{ padding: "8px 12px 12px 12px" }}>
+                                    {vehicleEntries.length === 0 ? (
+                                      <div style={{ fontSize: 11, color: "#94a3b8", padding: "8px 0" }}>No entries for this vehicle.</div>
+                                    ) : (
+                                      <div style={{ overflowX: "auto", background: "white", border: "1px solid #e2e8f0", borderRadius: 6 }}>
+                                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                                          <thead>
+                                            <tr style={{ background: "#f1f5f9" }}>
+                                              {["Date", "Driver", "Station", "Litres", "$/L", "Cost", hb ? "Hours" : "Odo", ""].map((h, hi) => (
+                                                <th key={hi} style={{ padding: "4px 6px", textAlign: "left", fontWeight: 600, color: "#64748b", borderBottom: "1px solid #e2e8f0", whiteSpace: "nowrap" }}>{h}</th>
+                                              ))}
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {vehicleEntries.map(e => (
+                                              <tr key={e.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                                                <td style={{ padding: "4px 6px", color: "#374151", whiteSpace: "nowrap" }}>{e.date || "\u2014"}</td>
+                                                <td style={{ padding: "4px 6px", color: "#374151" }}>{e.driverName || "\u2014"}</td>
+                                                <td style={{ padding: "4px 6px", color: "#64748b" }}>{e.station || "\u2014"}</td>
+                                                <td style={{ padding: "4px 6px", color: "#374151" }}>{e.litres ? `${e.litres}L` : "\u2014"}</td>
+                                                <td style={{ padding: "4px 6px", color: "#374151" }}>{e.pricePerLitre ? `$${e.pricePerLitre}` : "\u2014"}</td>
+                                                <td style={{ padding: "4px 6px", fontWeight: 600, color: "#16a34a" }}>{e.totalCost ? `$${e.totalCost.toFixed(2)}` : "\u2014"}</td>
+                                                <td style={{ padding: "4px 6px", color: "#374151" }}>{e.odometer ? e.odometer.toLocaleString() : "\u2014"}</td>
+                                                <td style={{ padding: "4px 6px", whiteSpace: "nowrap" }}>
+                                                  {e.hasReceipt && (
+                                                    <button onClick={(ev) => { ev.stopPropagation(); setViewingReceipt(e.id); }} title="View receipt" style={{
+                                                      padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600,
+                                                      background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe", cursor: "pointer", marginRight: 3,
+                                                    }}>{"\uD83D\uDCC4"}</button>
+                                                  )}
+                                                  <button onClick={(ev) => { ev.stopPropagation(); setEditingEntry(e); }} title="Edit entry" style={{
+                                                    padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600,
+                                                    background: "#fefce8", color: "#854d0e", border: "1px solid #fde047", cursor: "pointer",
+                                                  }}>{"\u270F\uFE0F"}</button>
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    )}
+                                  </td>
+                                </tr>
+                              )}
+                              </React.Fragment>
                             );
                           })}
                         </tbody>
