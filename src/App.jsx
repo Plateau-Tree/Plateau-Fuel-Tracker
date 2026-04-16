@@ -10873,31 +10873,28 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       return dt.getFullYear() === filterYear && dt.getMonth() + 1 === filterMonth;
     });
 
-    // Group by fleet card number
-    const byCard = {};
+    // Group by fleet card rego (vehicle registration on the card)
+    const byRego = {};
     monthEntries.forEach(e => {
-      const card = e.fleetCardNumber || e.cardRego || "";
-      if (!card) return;
-      const key = card.replace(/\s/g, "");
-      if (!byCard[key]) byCard[key] = { card: key, entries: [], totalLitres: 0, totalCost: 0, drivers: new Set(), regos: new Set() };
-      byCard[key].entries.push(e);
-      byCard[key].totalLitres += e.litres || 0;
-      byCard[key].totalCost += e.totalCost || 0;
-      if (e.driverName) byCard[key].drivers.add(e.driverName);
-      if (e.registration) byCard[key].regos.add(e.registration);
-      if (e.entryType === "other" && e.equipment) byCard[key].regos.add(e.equipment);
+      const rego = (e.cardRego || e.registration || (e.entryType === "other" ? e.equipment : "") || "").trim().toUpperCase();
+      if (!rego) return;
+      if (!byRego[rego]) byRego[rego] = { rego, entries: [], totalLitres: 0, totalCost: 0, drivers: new Set(), cards: new Set() };
+      byRego[rego].entries.push(e);
+      byRego[rego].totalLitres += e.litres || 0;
+      byRego[rego].totalCost += e.totalCost || 0;
+      if (e.driverName) byRego[rego].drivers.add(e.driverName);
+      if (e.fleetCardNumber) byRego[rego].cards.add(e.fleetCardNumber.replace(/\s/g, ""));
     });
 
-    const cards = Object.values(byCard).sort((a, b) => b.totalCost - a.totalCost);
+    const cards = Object.values(byRego).sort((a, b) => a.rego.localeCompare(b.rego));
 
     // Filter by search term
     const cardSearchTerm = cardSearch.trim().toUpperCase();
     const filteredCards = cardSearchTerm
       ? cards.filter(c =>
-          [...c.regos].some(r => r.toUpperCase().includes(cardSearchTerm)) ||
+          c.rego.includes(cardSearchTerm) ||
           [...c.drivers].some(d => d.toUpperCase().includes(cardSearchTerm)) ||
-          c.card.includes(cardSearchTerm) ||
-          c.card.slice(-6).includes(cardSearchTerm)
+          [...c.cards].some(cn => cn.includes(cardSearchTerm) || cn.slice(-6).includes(cardSearchTerm))
         )
       : cards;
 
@@ -10923,44 +10920,45 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       const summaryRows = [
         ["Fleet Card Transaction Summary", "", "", "", monthLabel],
         [],
-        ["Card Number", "Last 6", "Drivers", "Vehicles/Items", "Transactions", "Total Litres", "Total Cost"],
+        ["Rego", "Card Number(s)", "Drivers", "Transactions", "Total Litres", "Total Cost"],
       ];
       cards.forEach(c => {
         summaryRows.push([
-          c.card, `...${c.card.slice(-6)}`,
-          [...c.drivers].join(", "), [...c.regos].join(", "),
+          c.rego, [...c.cards].map(cn => `...${cn.slice(-6)}`).join(", ") || "\u2014",
+          [...c.drivers].join(", "),
           c.entries.length, Math.round(c.totalLitres * 100) / 100,
           Math.round(c.totalCost * 100) / 100,
         ]);
       });
       summaryRows.push([]);
-      summaryRows.push(["", "", "", "", "GRAND TOTAL", grandLitres.toFixed(2), grandTotal.toFixed(2)]);
+      summaryRows.push(["", "", "", "GRAND TOTAL", grandLitres.toFixed(2), grandTotal.toFixed(2)]);
       const summaryWs = XLSX.utils.aoa_to_sheet(summaryRows);
-      summaryWs["!cols"] = [{wch:20},{wch:10},{wch:25},{wch:25},{wch:12},{wch:12},{wch:12}];
+      summaryWs["!cols"] = [{wch:12},{wch:22},{wch:25},{wch:12},{wch:12},{wch:12}];
       XLSX.utils.book_append_sheet(wb, summaryWs, "Summary");
 
       // Per-card detail sheets
       cards.forEach(c => {
-        const tabName = `Card ${c.card.slice(-6)}`.slice(0, 31);
+        const tabName = c.rego.slice(0, 31);
         const rows = [
-          [`Fleet Card: ${c.card}`, "", "", "", "", monthLabel],
+          [`Rego: ${c.rego}`, "", "", "", "", monthLabel],
+          [`Card(s): ${[...c.cards].map(cn => formatCardNumber(cn)).join(", ") || "\u2014"}`],
           ["Drivers: " + [...c.drivers].join(", ")],
           [],
-          ["Date", "Driver", "Rego / Item", "Station", "Litres", "$/L", "Cost", "Fuel Type", "Division", "Type"],
+          ["Date", "Driver", "Station", "Litres", "$/L", "Cost", "Fuel Type", "Division", "Type", "Card"],
         ];
         c.entries.forEach(e => {
           rows.push([
             e.date || "", e.driverName || "",
-            e.entryType === "other" ? (e.equipment || "Other") : (e.registration || ""),
             e.station || "", e.litres || "", e.pricePerLitre || "",
             e.totalCost ? Math.round(e.totalCost * 100) / 100 : "",
             e.fuelType || "", e.division || "", e.vehicleType || "",
+            e.fleetCardNumber ? `...${e.fleetCardNumber.slice(-6)}` : "",
           ]);
         });
         rows.push([]);
-        rows.push(["", "", "", "TOTAL", c.totalLitres.toFixed(2), "", c.totalCost.toFixed(2)]);
+        rows.push(["", "", "TOTAL", c.totalLitres.toFixed(2), "", c.totalCost.toFixed(2)]);
         const ws = XLSX.utils.aoa_to_sheet(rows);
-        ws["!cols"] = [{wch:12},{wch:18},{wch:14},{wch:20},{wch:8},{wch:7},{wch:10},{wch:10},{wch:10},{wch:12}];
+        ws["!cols"] = [{wch:12},{wch:18},{wch:20},{wch:8},{wch:7},{wch:10},{wch:10},{wch:10},{wch:12},{wch:12}];
         XLSX.utils.book_append_sheet(wb, ws, tabName);
       });
 
@@ -11004,7 +11002,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             {[
               { label: "Total Spend", value: `$${grandTotal.toFixed(2)}`, color: "#0f172a" },
               { label: "Total Litres", value: `${grandLitres.toFixed(0)}L`, color: "#0f172a" },
-              { label: "Fleet Cards", value: cards.length, color: "#16a34a" },
+              { label: "Vehicles", value: cards.length, color: "#16a34a" },
             ].map(s => (
               <div key={s.label} style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: "12px 10px", textAlign: "center" }}>
                 <div style={{ fontSize: 22, fontWeight: 700, color: s.color }}>{s.value}</div>
@@ -11054,24 +11052,24 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           </div>
         ) : (
           filteredCards.map(c => (
-            <div key={c.card} style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 12, overflow: "hidden" }}>
-              {/* Card header */}
+            <div key={c.rego} style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 12, overflow: "hidden" }}>
+              {/* Card header — grouped by rego */}
               <div style={{
                 padding: "12px 14px", background: "#fff7ed", borderBottom: "1px solid #fdba74",
                 display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8,
               }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  {isAdmin && editingCard?.oldCard === c.card ? (
+                  {isAdmin && editingCard?.oldRego === c.rego ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600, width: 55 }}>Card #:</span>
-                        <input value={formatCardNumber(editingCard.newCard)} onChange={e => setEditingCard(p => ({ ...p, newCard: e.target.value.replace(/\s/g, "") }))}
-                          style={{ flex: 1, padding: "4px 8px", borderRadius: 5, border: "1px solid #fdba74", fontSize: 12, fontFamily: "inherit", outline: "none", color: "#0f172a" }} />
-                      </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600, width: 55 }}>Rego:</span>
                         <input value={editingCard.newRego} onChange={e => setEditingCard(p => ({ ...p, newRego: e.target.value.toUpperCase() }))}
                           style={{ flex: 1, padding: "4px 8px", borderRadius: 5, border: "1px solid #fdba74", fontSize: 12, fontFamily: "inherit", outline: "none", color: "#0f172a", textTransform: "uppercase" }} />
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600, width: 55 }}>Card #:</span>
+                        <input value={formatCardNumber(editingCard.newCard)} onChange={e => setEditingCard(p => ({ ...p, newCard: e.target.value.replace(/\s/g, "") }))}
+                          style={{ flex: 1, padding: "4px 8px", borderRadius: 5, border: "1px solid #fdba74", fontSize: 12, fontFamily: "inherit", outline: "none", color: "#0f172a" }} />
                       </div>
                       <div style={{ display: "flex", gap: 6, marginTop: 2 }}>
                         <button onClick={async () => {
@@ -11084,14 +11082,14 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                   ) : (
                     <>
                       <div style={{ fontSize: 14, fontWeight: 700, color: "#c2410c", display: "flex", alignItems: "center", gap: 6 }}>
-                        {"\uD83D\uDCB3"} {formatCardNumber(c.card)}
+                        {"\uD83D\uDE9A"} {c.rego}
                         {isAdmin && (
-                          <button onClick={() => setEditingCard({ oldCard: c.card, newCard: c.card, newRego: [...c.regos].join(", ") })}
+                          <button onClick={() => setEditingCard({ oldRego: c.rego, oldCard: [...c.cards][0] || "", newCard: [...c.cards][0] || "", newRego: c.rego })}
                             title="Edit card details" style={{ background: "none", border: "none", color: "#c2410c", cursor: "pointer", fontSize: 12, padding: "0 4px", opacity: 0.6 }}>{"\u270E"}</button>
                         )}
                       </div>
                       <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>
-                        {[...c.drivers].join(", ")} {"\u00B7"} {[...c.regos].join(", ")}
+                        {[...c.drivers].join(", ")}{c.cards.size > 0 ? ` \u00B7 ${[...c.cards].map(cn => `...${cn.slice(-6)}`).join(", ")}` : ""}
                       </div>
                     </>
                   )}
@@ -11104,30 +11102,29 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                   <button onClick={() => {
                     const wb = XLSX.utils.book_new();
                     const rows = [
-                      [`Fleet Card: ...${c.card.slice(-6)}`, "", "", "", "", monthLabel],
+                      [`Rego: ${c.rego}`, "", "", "", "", monthLabel],
+                      [`Card(s): ${[...c.cards].map(cn => formatCardNumber(cn)).join(", ") || "\u2014"}`],
                       [`Drivers: ${[...c.drivers].join(", ")}`],
-                      [`Vehicles: ${[...c.regos].join(", ")}`],
                       [],
-                      ["Date", "Driver", "Rego / Item", "Division", "Type", "Station", "Litres", "$/L", "Cost ($)", "Fuel Type", "Notes"],
+                      ["Date", "Driver", "Station", "Litres", "$/L", "Cost ($)", "Fuel Type", "Division", "Type", "Card"],
                     ];
                     c.entries.forEach(e => {
                       rows.push([
                         e.date || "", e.driverName || "",
-                        e.entryType === "other" ? (e.equipment || "Other") : (e.registration || ""),
-                        e.division || "", e.vehicleType || e.entryType || "",
                         e.station || "", e.litres || "", e.pricePerLitre || "",
                         e.totalCost ? Math.round(e.totalCost * 100) / 100 : "",
-                        e.fuelType || "", e.notes || "",
+                        e.fuelType || "", e.division || "", e.vehicleType || e.entryType || "",
+                        e.fleetCardNumber ? `...${e.fleetCardNumber.slice(-6)}` : "",
                       ]);
                     });
                     rows.push([]);
-                    rows.push(["TOTAL", "", "", "", "", "", c.totalLitres.toFixed(2), "", Math.round(c.totalCost * 100) / 100, "", ""]);
+                    rows.push(["", "", "TOTAL", c.totalLitres.toFixed(2), "", Math.round(c.totalCost * 100) / 100]);
                     const ws = XLSX.utils.aoa_to_sheet(rows);
-                    ws["!cols"] = [{wch:12},{wch:18},{wch:14},{wch:12},{wch:12},{wch:20},{wch:8},{wch:7},{wch:10},{wch:14},{wch:25}];
+                    ws["!cols"] = [{wch:12},{wch:18},{wch:20},{wch:8},{wch:7},{wch:10},{wch:14},{wch:10},{wch:12},{wch:12}];
                     XLSX.utils.book_append_sheet(wb, ws, "Transactions");
-                    XLSX.writeFile(wb, `FleetCard_${c.card.slice(-6)}_${monthLabel.replace(/\s/g, "_")}.xlsx`);
-                    showToast(`Exported card ...${c.card.slice(-6)}`);
-                  }} title="Download this card" style={{
+                    XLSX.writeFile(wb, `FleetCard_${c.rego}_${monthLabel.replace(/\s/g, "_")}.xlsx`);
+                    showToast(`Exported ${c.rego}`);
+                  }} title="Download this rego" style={{
                     padding: "6px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
                     cursor: "pointer", fontFamily: "inherit",
                     background: "#c2410c", color: "white", border: "none", flexShrink: 0,
@@ -11187,7 +11184,8 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
 
         {/* Learned Card Corrections — admin section showing what the system has learned */}
         {isAdmin && (() => {
-          const mappingEntries = Object.entries(learnedCardMappings);
+          const mappingEntries = Object.entries(learnedCardMappings)
+            .sort(([, a], [, b]) => (a.correctRego || "").localeCompare(b.correctRego || ""));
           if (mappingEntries.length === 0) return null;
           return (
             <div style={{ marginTop: 28 }}>
@@ -11211,9 +11209,9 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                 <table className="data-table">
                   <thead>
                     <tr style={{ background: "#fafafa" }}>
+                      <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Rego</th>
                       <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>AI Misread</th>
                       <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Corrected To</th>
-                      <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Rego</th>
                       <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Learned</th>
                       <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0", width: 40 }}></th>
                     </tr>
@@ -11221,13 +11219,13 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                   <tbody>
                     {mappingEntries.map(([key, m]) => (
                       <tr key={key}>
+                        <td style={{ fontWeight: 600, color: "#0f172a", fontSize: 12 }}>{m.correctRego || "\u2014"}</td>
                         <td style={{ color: "#dc2626", fontSize: 11, fontFamily: "monospace" }}>
                           {m.rawCard ? `...${m.rawCard.slice(-8)}` : m.rawRego || key}
                         </td>
                         <td style={{ color: "#16a34a", fontSize: 11, fontFamily: "monospace", fontWeight: 600 }}>
                           ...{m.correctCard?.slice(-8) || "?"}
                         </td>
-                        <td style={{ fontWeight: 600, color: "#0f172a", fontSize: 12 }}>{m.correctRego || "\u2014"}</td>
                         <td style={{ color: "#64748b", fontSize: 10 }}>
                           {m.learnedAt ? new Date(m.learnedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : "\u2014"}
                         </td>
