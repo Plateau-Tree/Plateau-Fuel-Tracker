@@ -2568,7 +2568,7 @@ function InlineReceipt({ entryId, loadFn }) {
 function ManualEntryModal({ rego, division, vehicleType, onSave, onClose }) {
   const [f, setF] = useState({
     driverName: "", date: "", odometer: "", litres: "", pricePerLitre: "", totalCost: "",
-    station: "", fuelType: "", fleetCardNumber: "",
+    station: "", fuelType: "", fleetCardNumber: "", cardRego: "",
   });
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }));
 
@@ -2609,11 +2609,15 @@ function ManualEntryModal({ rego, division, vehicleType, onSave, onClose }) {
           <FieldInput label="Station" value={f.station} onChange={v => set("station", v)} placeholder="e.g. Ampol" />
           <FieldInput label="Fuel Type" value={f.fuelType} onChange={v => set("fuelType", v)} placeholder="e.g. Diesel" />
         </div>
-        <FieldInput label="Fleet Card Number" value={formatCardNumber(f.fleetCardNumber)} onChange={v => set("fleetCardNumber", v.replace(/\s/g, ""))} placeholder="Optional" />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <FieldInput label="Fleet Card Number" value={formatCardNumber(f.fleetCardNumber)} onChange={v => set("fleetCardNumber", v.replace(/\s/g, ""))} placeholder="Optional" />
+          <FieldInput label="Fleet Card Rego" value={f.cardRego} onChange={v => set("cardRego", v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 7))} placeholder="e.g. EIA53F" />
+        </div>
 
         <div style={{ marginTop: 8 }}>
           <PrimaryBtn onClick={() => {
             if (!f.driverName || !f.date || !f.odometer) return;
+            const cleanCardRego = (f.cardRego || "").toUpperCase().replace(/\s+/g, "");
             onSave({
               id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
               submittedAt: new Date().toISOString(),
@@ -2628,7 +2632,8 @@ function ManualEntryModal({ rego, division, vehicleType, onSave, onClose }) {
               station: f.station.trim(),
               fuelType: f.fuelType.trim(),
               fleetCardNumber: f.fleetCardNumber.trim(),
-              fleetCardVehicle: "", fleetCardDriver: "", vehicleName: "",
+              cardRego: cleanCardRego,
+              fleetCardVehicle: cleanCardRego, fleetCardDriver: "", vehicleName: "",
               manualEntry: true,
             });
           }}>Add Entry</PrimaryBtn>
