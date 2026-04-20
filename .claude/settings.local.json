@@ -27,7 +27,9 @@
       "Bash(npx vite:*)",
       "Bash(node -e \"const fs=require\\('fs'\\);const p='src/App.jsx';let s=fs.readFileSync\\(p,'utf8'\\);s=s.replace\\(/RECEIPT_SCAN_PROMPT/g,'buildReceiptScanPrompt\\(\\)'\\);fs.writeFileSync\\(p,s\\);console.log\\('done'\\)\")",
       "Bash(node -e \"const fs=require\\('fs'\\);const lines=fs.readFileSync\\('src/App.jsx','utf8'\\).split\\('\\\\n'\\);for\\(let i=9380;i<lines.length;i++\\){if\\(lines[i].match\\(/^\\\\s*\\\\}\\\\\\)\\\\\\(\\\\\\)\\\\}\\\\s*$/\\)\\){console.log\\(\\(i+1\\)+': '+lines[i]\\);if\\(i>9500\\)break;}}\")",
-      "Bash(node -e \"const fs=require\\('fs'\\);const lines=fs.readFileSync\\('src/App.jsx','utf8'\\).split\\('\\\\n'\\);for\\(let i=9380;i<9730;i++\\){if\\(lines[i].includes\\('}\\)\\(\\)}'\\)\\){console.log\\(\\(i+1\\)+': '+lines[i]\\);}}\")"
+      "Bash(node -e \"const fs=require\\('fs'\\);const lines=fs.readFileSync\\('src/App.jsx','utf8'\\).split\\('\\\\n'\\);for\\(let i=9380;i<9730;i++\\){if\\(lines[i].includes\\('}\\)\\(\\)}'\\)\\){console.log\\(\\(i+1\\)+': '+lines[i]\\);}}\")",
+      "Bash(node -e \"const fs=require\\('fs'\\);const t=fs.readFileSync\\('src/App.jsx','utf8'\\);const matches=[...t.matchAll\\(/Pellizz?on/gi\\)];console.log\\('Matches:',matches.length\\);matches.forEach\\(m=>{const line=t.substring\\(0,m.index\\).split\\('\\\\n'\\).length;const snippet=t.substring\\(Math.max\\(0,m.index-50\\),m.index+60\\);console.log\\('Line',line,':',snippet\\);}\\);\")",
+      "Bash(node -e \"const fs=require\\('fs'\\);let t=fs.readFileSync\\('src/App.jsx','utf8'\\);const target='driverName: \\\\`\\\\${form.driverFirstName.trim\\(\\)} \\\\${form.driverLastName.trim\\(\\)}\\\\`.trim\\(\\),';const repl='driverName: normalizeDriverName\\(\\\\`\\\\${form.driverFirstName.trim\\(\\)} \\\\${form.driverLastName.trim\\(\\)}\\\\`.trim\\(\\)\\),';const count=\\(t.match\\(new RegExp\\(target.replace\\(/[.*+?^\\\\${}\\(\\)|[\\\\]\\\\\\\\\\\\\\\\]/g,'\\\\\\\\\\\\\\\\\\\\$&'\\),'g'\\)\\)||[]\\).length;console.log\\('Found',count,'occurrences'\\);t=t.split\\(target\\).join\\(repl\\);fs.writeFileSync\\('src/App.jsx',t\\);console.log\\('Replaced all'\\);\")"
     ]
   }
 }

@@ -353,6 +353,19 @@ const DRIVER_CARDS = [
 {n:"KYLE OSBORNE",c:"7034305113700650",r:"AP85DF"},{n:"JASON SORBARA",c:"7034305108940667",r:"AT13VE"},{n:"NAISH",c:"7034305107330928",r:"BF51KJ"},{n:"JUSTIN LEWIS",c:"7034305116558659",r:"BJ57HC"},{n:"NICK JONES",c:"7034305115783134",r:"BR22ZZ"},{n:"JASON HUGHES",c:"7034305105574238",r:"BT08QM"},{n:"BRENDAN RICHARDSON",c:"7034305110165261",r:"BY38KR"},{n:"LUKE BARTLEY",c:"7034305106436460",r:"CA10BL"},{n:"BILLY PRICE",c:"7034305113893588",r:"CC24TI"},{n:"GAB FITZGERALD",c:"7034305111758833",r:"CC94JL"},{n:"JOE HUTTON",c:"7034305106228180",r:"CD36PH"},{n:"RACHAEL KEATING",c:"7034305106786955",r:"CH90KL"},{n:"DANIEL THOMSON",c:"7034305108274448",r:"CH95ZD"},{n:"KYLE OSBORNE",c:"7034305109332146",r:"CI98BZ"},{n:"KEV CARRILLO",c:"7034305108260140",r:"CJ55FB"},{n:"DAN THOMPSON",c:"7034305107310136",r:"CL52NS"},{n:"BILLY PRICE",c:"7034305116027192",r:"CM77KG"},{n:"CHRIS PLAYER",c:"7034305117020659",r:"CN47HS"},{n:"SHAUN COLE",c:"7034305113746059",r:"CP60AF"},{n:"DENNIS KOCJANCIC",c:"7034305116296961",r:"CP06YZ"},{n:"SHANE DEMIRAL",c:"7034305112151236",r:"CT74KE"},{n:"SAXON",c:"7034305106890443",r:"CV14NO"},{n:"LAURA HARDWOOD",c:"7034305114887118",r:"CX22BE"},{n:"MICK THOMAS",c:"7034305106791179",r:"CX23BE"},{n:"JAYDEN STRONG",c:"7034305112823891",r:"DB78SC"},{n:"KYLE OSBORNE",c:"7034305111704035",r:"DF25LB"},{n:"JACOB DEVEIGNE",c:"7034305110028204",r:"DF26LB"},{n:"ALEX GLYNN",c:"7034305112341555",r:"DI05QD"},{n:"DAMIAN SEMPEL",c:"7034305116822212",r:"CS63LP"},{n:"JACOB DEVEIGNE",c:"7034305117003408",r:"DP60DA"},{n:"BRETT SONTER",c:"7034305108863984",r:"DPL85C"},{n:"TIM PRICE",c:"7034305114660168",r:"DP90CQ"},{n:"JASON HUGHES",c:"7034305112129919",r:"DSU65Y"},{n:"PHIL CARSON",c:"7034305108545714",r:"DSU65Y"},{n:"SONYA",c:"7034305114570151",r:"EAE28V"},{n:"SAM LAW",c:"7034305113442394",r:"EBL30C"},{n:"AMELIA PLUMMER",c:"7034305115642942",r:"ECE83U"},{n:"LEE DAVIS",c:"7034305107318832",r:"EES53B"},{n:"JOE PELLIZZON",c:"7034305117257665",r:"EYO62W"},{n:"JOHN LARGEY",c:"7034305111069538",r:"EOL97X"},{n:"MARTIN HOWARD",c:"7034305113441354",r:"EQE85L"},{n:"BJ",c:"7034305110325493",r:"EQP77D"},{n:"JOE HURST",c:"7034305112846991",r:"EQP77E"},{n:"RHYS DWYER",c:"7034305109386829",r:"ERQ21S"},{n:"ANT YOUNGMAN",c:"7034305105562266",r:"EVA47B"},{n:"DECLAN KANE",c:"7034305107192484",r:"EYN61Z"},{n:"DAYNE COOMBE",c:"7034305107009274",r:"EYO02K"},{n:"CASS CHAPPLE",c:"7034305107286914",r:"EYP02J"},{n:"DANE PLUMMER",c:"7034305116249275",r:"FGP29X"},{n:"TONY PLUMMER",c:"7034305111220834",r:"FHX25L"},{n:"JOE DALEY",c:"7034305116246156",r:"FMT17H"},{n:"JASON JOHNSON",c:"7034305113817595",r:"JCJ010"},{n:"CAM WILLIAMS",c:"7034305117354637",r:"MISC3"},{n:"CARLOS CARRILLO",c:"7034305115254565",r:"WIA53F"},{n:"WADE HANNELL",c:"7034305116506179",r:"WNU522"},{n:"OLD BOGIE",c:"7034305111430383",r:"XN56BU"},{n:"NATHAN MORALES",c:"7034305110311667",r:"XN59QZ"},{n:"SCOTT WOOD",c:"7034305110006994",r:"XN95CF"},{n:"ALEX GLYNN",c:"7034305116398783",r:"XO05MA"},{n:"MATTHEW BROCK",c:"7034305108678176",r:"XO05RX"},{n:"MATT ROGERS",c:"7034305111375786",r:"XO08FN"},{n:"MAROS MENCAK",c:"7034305111698906",r:"XO20NL"},{n:"TIM PRICE",c:"7034305113655797",r:"XO49LN"},{n:"SHAUN DENNISON",c:"7034305110811948",r:"XO96XP"},{n:"STEVE NEWTON",c:"7034305111299762",r:"XP058N"},{n:"DOUG GRANT",c:"7034305116197722",r:"XP31AG"},{n:"JASON HUGHES",c:"7034305116247253",r:"XP41MC"},{n:"JASON SORBARA",c:"7034305117860930",r:"XP86LM"},{n:"ROGER BORG",c:"7034305106723230",r:"YMN14E"},{n:"MATHEW BROCK",c:"7034305108678176",r:"XO05RX"},{n:"NICK JONES",c:"7034305118134137",r:"TA55AA"},{n:"CAM WILLIAMS",c:"7034305118134749",r:"TA80QZ"},{n:"MAROS MENCAK",c:"7034305118133972",r:"TC70VA"},{n:"JASON HUGHES",c:"7034305118175825",r:"TC80LA"},{n:"SPARE",c:"7034305118133980",r:"TL48UF"},{n:"DENNIS KOCJANCIC",c:"7034305118145893",r:"TL56PO"},{n:"DOUG GRANT",c:"7034305118148491",r:"TM84AT"},{n:"SPARE",c:"7034305118133311",r:"TP97AL"},{n:"STEVE NEWTON",c:"7034305118133477",r:"TP99AL"},{n:"MATT ROGERS",c:"7034305118177383",r:"YN05HA"},{n:"SCOTT WOOD",c:"7034305118178019",r:"YN71AN"}
 ];
 
+// ─── Driver Name Aliases ───────────────────────────────────────────────────
+// Maps known name variants to a single canonical form so the same person
+// doesn't appear as two different drivers on the Drivers tab or in reports.
+// Keys are lowercase/trimmed; values are the canonical display name.
+const DRIVER_NAME_ALIASES = {
+  "joseph pellizzon": "Joe Pellizzon",
+};
+function normalizeDriverName(name) {
+  if (!name) return name;
+  const key = name.trim().toLowerCase().replace(/\s+/g, " ");
+  return DRIVER_NAME_ALIASES[key] || name.trim();
+}
+
 // Lookup fleet cards by driver name — fuzzy match, returns all cards for that person
 function lookupDriverCards(name) {
   if (!name || name.length < 2) return [];
@@ -2621,7 +2634,7 @@ function ManualEntryModal({ rego, division, vehicleType, onSave, onClose }) {
             onSave({
               id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
               submittedAt: new Date().toISOString(),
-              driverName: f.driverName.trim(),
+              driverName: normalizeDriverName(f.driverName.trim()),
               registration: rego,
               division, vehicleType,
               odometer: parseFloat(f.odometer) || null,
@@ -2943,7 +2956,7 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
                   ...entry,
                   entryType: "other",
                   subType: isProduct ? "product" : "fuel",
-                  driverName: f.driverName.trim(),
+                  driverName: normalizeDriverName(f.driverName.trim()),
                   date: f.date.trim(),
                   equipment: f.equipment.trim(),
                   linkedVehicle: f.linkedVehicle.trim().toUpperCase() || null,
@@ -2969,7 +2982,7 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
                   ...entry,
                   entryType: null, // normal vehicle entry
                   subType: null,
-                  driverName: f.driverName.trim(),
+                  driverName: normalizeDriverName(f.driverName.trim()),
                   registration: f.registration.trim().toUpperCase(),
                   date: f.date.trim(),
                   odometer: numOrNull(f.odometer),
@@ -4662,7 +4675,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
         entryType: "other",
         subType: isOil ? "product" : "fuel", // distinguish fuel vs product purchase
         division: otherForm.division || "Tree",
-        driverName: `${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim(),
+        driverName: normalizeDriverName(`${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim()),
         equipment: otherForm.equipment.trim(),
         station: otherForm.station.trim() || station,
         fleetCardNumber: cardData?.cardNumber || cardNum || otherForm.fleetCard.trim() || "",
@@ -4739,7 +4752,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       return {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         submittedAt: now,
-        driverName: `${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim(),
+        driverName: normalizeDriverName(`${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim()),
         registration: rego,
         division: division || getDivision(vehicleType),
         vehicleType,
@@ -4927,7 +4940,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
             submittedAt: now,
             entryType: "other",
             division: form.division || "Tree",
-            driverName: `${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim(),
+            driverName: normalizeDriverName(`${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim()),
             equipment: equipDesc,
             station,
             fleetCardNumber: cardNum,
@@ -7304,7 +7317,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
   // Save a single pending extra entry (vehicle or other)
   const savePendingExtra = async (draft) => {
     const now = new Date().toISOString();
-    const driverName = `${draft.driverFirstName || ""} ${draft.driverLastName || ""}`.trim();
+    const driverName = normalizeDriverName(`${draft.driverFirstName || ""} ${draft.driverLastName || ""}`.trim());
 
     if (draft._type === "vehicle") {
       if (!draft.rego) { showToast("Please enter a rego for this vehicle"); return; }
@@ -10237,8 +10250,9 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       return null;
     };
     for (const e of entries) {
-      const name = e.driverName || e.driver || "";
-      if (!name) continue;
+      const rawName = e.driverName || e.driver || "";
+      if (!rawName) continue;
+      const name = normalizeDriverName(rawName);
       const nameKey = name.trim().toLowerCase();
       const matchedKey = findMatchingKey(nameKey);
       const key = matchedKey || nameKey;
