@@ -2403,10 +2403,11 @@ function ConfirmDialog({ message, onConfirm, onCancel }) {
 }
 
 // ─── Edit Vehicle Modal ─────────────────────────────────────────────────
-function EditVehicleModal({ rego, currentDivision, currentType, entries: regoEntries, onSave, onClose }) {
+function EditVehicleModal({ rego, currentDivision, currentType, currentName, entries: regoEntries, onSave, onClose }) {
   const [newRego, setNewRego] = useState(rego || "");
   const [div, setDiv] = useState(currentDivision || "");
   const [vtype, setVtype] = useState(currentType || "");
+  const [vname, setVname] = useState(currentName || "");
   const divTypes = div && DIVISIONS[div] ? DIVISIONS[div].types : [];
   const cleanNewRego = newRego.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
   const regoChanged = cleanNewRego && cleanNewRego !== rego;
@@ -2440,6 +2441,18 @@ function EditVehicleModal({ rego, currentDivision, currentType, entries: regoEnt
               {"\u26A0\uFE0F"} Renaming will update all {regoEntries} entries from {rego} to {cleanNewRego}
             </div>
           )}
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ display: "block", fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 6 }}>Vehicle Name</label>
+          <input
+            value={vname}
+            onChange={e => setVname(e.target.value)}
+            placeholder="e.g. TOYOTA HILUX"
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 14, fontFamily: "inherit", outline: "none", color: "#0f172a" }}
+            onFocus={e => e.target.style.borderColor = "#7c3aed"}
+            onBlur={e => e.target.style.borderColor = "#e2e8f0"}
+          />
         </div>
 
         <div style={{ marginBottom: 14 }}>
@@ -2487,7 +2500,7 @@ function EditVehicleModal({ rego, currentDivision, currentType, entries: regoEnt
         <div style={{ display: "flex", gap: 10 }}>
           <SecondaryBtn onClick={onClose} small>Cancel</SecondaryBtn>
           <div style={{ flex: 1 }}>
-            <PrimaryBtn onClick={() => { if (div && vtype && cleanNewRego) onSave(rego, div, vtype, cleanNewRego); }} disabled={!div || !vtype || !cleanNewRego}>
+            <PrimaryBtn onClick={() => { if (div && vtype && cleanNewRego) onSave(rego, div, vtype, cleanNewRego, vname.trim()); }} disabled={!div || !vtype || !cleanNewRego}>
               Save Changes
             </PrimaryBtn>
           </div>
@@ -5148,9 +5161,10 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     });
   };
 
-  const saveVehicleEdit = async (rego, newDivision, newVehicleType, newRego) => {
+  const saveVehicleEdit = async (rego, newDivision, newVehicleType, newRego, newVehicleName) => {
     const finalRego = (newRego || rego).toUpperCase().replace(/[^A-Z0-9]/g, "");
     const renaming = finalRego && finalRego !== rego;
+    const cleanName = (newVehicleName || "").trim();
     // Guard: block a rename that collides with an existing different vehicle's learnedDB entry
     if (renaming && learnedDBRef.current[finalRego]) {
       showToast(`${finalRego} already exists in vehicle database`, "warn");
@@ -5158,7 +5172,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     }
     const updated = entries.map(e =>
       e.registration === rego
-        ? { ...e, registration: finalRego, division: newDivision, vehicleType: newVehicleType }
+        ? { ...e, registration: finalRego, division: newDivision, vehicleType: newVehicleType, vehicleName: cleanName || e.vehicleName || "" }
         : e
     );
     await persist(updated);
@@ -5170,9 +5184,9 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     let newLearned;
     if (renaming) {
       const { [rego]: _oldKey, ...rest } = currentDB;
-      newLearned = { ...rest, [finalRego]: { ...existing, ...(rest[finalRego] || {}), t: newVehicleType, d: newDivision } };
+      newLearned = { ...rest, [finalRego]: { ...existing, ...(rest[finalRego] || {}), t: newVehicleType, d: newDivision, n: cleanName || existing.n || rest[finalRego]?.n || "" } };
     } else {
-      newLearned = { ...currentDB, [rego]: { ...existing, t: newVehicleType, d: newDivision } };
+      newLearned = { ...currentDB, [rego]: { ...existing, t: newVehicleType, d: newDivision, n: cleanName || existing.n || "" } };
     }
     await persistLearned(newLearned);
     setEditingVehicle(null);
@@ -11720,11 +11734,14 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       {editingVehicle && (() => {
         const veEntries = entries.filter(e => e.registration === editingVehicle);
         const latest = veEntries[veEntries.length - 1];
+        const dbMatch = lookupRego(editingVehicle, learnedDBRef.current, entries);
+        const currentName = latest?.vehicleName || dbMatch?.n || "";
         return (
           <EditVehicleModal
             rego={editingVehicle}
             currentDivision={latest?.division || ""}
             currentType={latest?.vehicleType || ""}
+            currentName={currentName}
             entries={veEntries.length}
             onSave={saveVehicleEdit}
             onClose={() => setEditingVehicle(null)}
