@@ -8063,9 +8063,15 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                               border: `1px solid ${showOverdueHighlight ? "#fca5a5" : isServiceSoon ? "#fcd34d" : "#e2e8f0"}`,
                               borderRadius: isExpanded ? "10px 10px 0 0" : 10, padding: "12px 14px", cursor: "pointer", transition: "all 0.15s",
                             }}>
+                            {(() => {
+                              const vehicleName = sorted[sorted.length - 1]?.vehicleName
+                                || lookupRego(rego, learnedDBRef.current, entries)?.n
+                                || "";
+                              return (
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
                                 <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", letterSpacing: "0.03em" }}>{rego}</span>
+                                {vehicleName && <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{vehicleName}</span>}
                                 {dangerCount > 0 && <span onClick={(ev) => {
                                   ev.stopPropagation();
                                   const dangerFlags = openVehicleFlags.filter(f => f.category === "ops" && f.type === "danger");
@@ -8092,6 +8098,8 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                                 <span style={{ fontSize: 18, color: "#94a3b8", transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>{"\u25BE"}</span>
                               </div>
                             </div>
+                              );
+                            })()}
                             <div style={{ display: "flex", gap: 16, fontSize: 11, color: "#64748b", flexWrap: "wrap" }}>
                               <span>{sorted.length} fill-ups</span>
                               {vehicleTotalLitres > 0 && <span>{vehicleTotalLitres.toFixed(1)}L total</span>}
