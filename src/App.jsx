@@ -3468,6 +3468,9 @@ export default function App() {
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const lastRefreshAttemptRef = useRef(0); // debouncing guard
+  // Tracks whether an edit modal is open — cloud refresh pauses while set so
+  // admin's unsaved form state isn't clobbered by a Realtime push mid-edit.
+  const editingInProgressRef = useRef(false);
 
   const [apiKey, setApiKey] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
@@ -3596,17 +3599,16 @@ export default function App() {
       if (supabase) {
         // Primary: save to Supabase app_settings table (reliable, no bucket needed)
         await db.saveSetting(`receipt_img_${entryId}`, imgData);
-        // Mark entry as having a receipt
+        // Mark entry as having a receipt — immutable update so React re-renders
+        // and the ref stays consistent with state (no mutation of old objects).
         const entry = entriesRef.current.find(e => e.id === entryId);
         if (entry) {
-          entry.hasReceipt = true;
-          entry.receiptUrl = `__db__${entryId}`;
-          db.saveEntry(entry).catch(() => {});
+          const updated = { ...entry, hasReceipt: true, receiptUrl: `__db__${entryId}` };
+          const nextEntries = entriesRef.current.map(e => e.id === entryId ? updated : e);
+          entriesRef.current = nextEntries;
+          setEntries(nextEntries);
+          db.saveEntry(updated).catch(() => {});
         }
-        setEntries(prev => prev.map(e => e.id === entryId
-          ? { ...e, hasReceipt: true, receiptUrl: `__db__${entryId}` }
-          : e
-        ));
         console.log("Receipt image saved to database for entry:", entryId);
       } else {
         // No Supabase — fallback to localStorage
@@ -3643,11 +3645,14 @@ export default function App() {
         const raw = await db.loadSetting(`receipt_img_${entryId}`);
         if (raw) {
           const parsed = JSON.parse(raw);
-          // Backfill the receiptUrl so next load is faster
+          // Backfill the receiptUrl so next load is faster — immutable update so
+          // React re-renders the "Show Receipt" button and the entry row badge.
           if (entry) {
-            entry.receiptUrl = `__db__${entryId}`;
-            entry.hasReceipt = true;
-            db.saveEntry(entry).catch(() => {});
+            const updated = { ...entry, receiptUrl: `__db__${entryId}`, hasReceipt: true };
+            const nextEntries = entriesRef.current.map(e => e.id === entryId ? updated : e);
+            entriesRef.current = nextEntries;
+            setEntries(nextEntries);
+            db.saveEntry(updated).catch(() => {});
           }
           return { url: `data:${parsed.mime};base64,${parsed.b64}` };
         }
@@ -3992,6 +3997,14 @@ export default function App() {
   // Realtime pushes a change. Debounced so rapid-fire triggers don't thrash.
   const refreshFromCloud = useCallback(async ({ silent = true, force = false } = {}) => {
     if (!supabase) return;
+    // Never overwrite local entries while an edit modal is open — the user's
+    // unsaved form would silently get clobbered by a cloud push. Skipped
+    // refreshes resume as soon as the modal closes (a state change triggers
+    // the auto-refresh effect to re-evaluate).
+    if (!force && editingInProgressRef.current) {
+      console.log("[Sync] Skipping refresh — edit modal open");
+      return;
+    }
     const now = Date.now();
     // Debounce: skip if we just refreshed <2s ago, unless force=true
     if (!force && now - lastRefreshAttemptRef.current < 2000) return;
@@ -4112,6 +4125,20 @@ export default function App() {
       channels.forEach(ch => { try { supabase.removeChannel(ch); } catch (_) {} });
     };
   }, [storageReady, refreshFromCloud]);
+
+  // Keep editingInProgressRef in sync with modal-open states. refreshFromCloud
+  // reads this ref and skips while the admin has unsaved form state. When the
+  // modal closes, we nudge a refresh so the user picks up any cloud changes
+  // that accumulated during the edit session.
+  useEffect(() => {
+    const wasEditing = editingInProgressRef.current;
+    const isEditing = !!(editingEntry || editingVehicle || manualEntry);
+    editingInProgressRef.current = isEditing;
+    if (wasEditing && !isEditing && supabase && storageReady) {
+      // Just closed the last edit modal — catch up on any deferred refreshes.
+      refreshFromCloud({ silent: true, force: true });
+    }
+  }, [editingEntry, editingVehicle, manualEntry, storageReady, refreshFromCloud]);
 
   // Generate a stable unique ID for a flag
   const flagId = (f) => `${f.rego}::${f.text}::${f.date || ""}::${f.odo || ""}`;
@@ -4951,7 +4978,9 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
         _cardAiIssues: cardData?._aiIssues || null,
         _reviewConfirmed: needsReviewConfirmation ? reviewConfirmed : null, // null=clean scan, true=user confirmed a suspect scan
       };
-      await persist([...entries, otherEntry], otherEntry);
+      // entriesRef.current reflects any cloud changes that arrived while the
+      // user was on the review screen — closure `entries` could be stale.
+      await persist([...entriesRef.current, otherEntry], otherEntry);
       if (receiptB64) await saveReceiptImage(otherEntry.id, receiptB64, receiptMime);
       setSaving(false);
       setStep(4);
@@ -5051,7 +5080,10 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       form.odometer, primaryLitres, primaryMatch, primaryLine, userEnteredPpl
     );
 
-    let allNew = entries;
+    // Use the ref rather than closure `entries` — the submit handler was
+    // bound at render time; a cloud refresh since then would silently be lost
+    // if we built the new array off the stale state value.
+    let allNew = entriesRef.current;
     const createdIds = [];
     allNew = insertChronological(allNew, primaryEntry);
     createdIds.push(primaryEntry.id);
@@ -5319,18 +5351,22 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
   };
 
   const deleteEntry = async (id) => {
-    await persist(entries.filter(e => e.id !== id));
+    // Read from the ref, not the closure-captured `entries` — a Realtime
+    // refresh between render and click would otherwise make us persist a
+    // stale array and silently delete entries added on other devices.
+    await persist(entriesRef.current.filter(e => e.id !== id));
     db.deleteEntry(id).catch(() => {});
     await deleteReceiptImage(id);
     showToast("Entry deleted");
   };
 
   const updateEntry = async (updatedEntry) => {
-    const newEntries = entries.map(e => e.id === updatedEntry.id ? updatedEntry : e);
+    // entriesRef.current reflects any cloud changes that arrived after this
+    // handler was bound — using the stale closure would drop those changes.
+    const newEntries = entriesRef.current.map(e => e.id === updatedEntry.id ? updatedEntry : e);
     // Re-sort this vehicle's entries by odometer
     const rego = updatedEntry.registration;
     const regoEntries = newEntries.filter(e => e.registration === rego).sort(sortEntries);
-    const otherEntries = newEntries.filter(e => e.registration !== rego);
     // Rebuild: keep other entries in place, weave sorted rego entries back in
     const result = [];
     let ri = 0;
@@ -5347,7 +5383,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
   const updateCardDetails = async (oldCardNum, newCardNum, newRego) => {
     const oldKey = oldCardNum.replace(/\s/g, "");
     const newKey = newCardNum.replace(/\s/g, "");
-    const updated = entries.map(e => {
+    const updated = entriesRef.current.map(e => {
       const entryCard = (e.fleetCardNumber || e.cardNumber || "").replace(/\s/g, "");
       if (entryCard !== oldKey) return e;
       const u = { ...e };
@@ -5374,10 +5410,13 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     setConfirmAction({
       message: `Delete ALL entries for ${rego}? This cannot be undone.`,
       onConfirm: async () => {
-        // Delete all entries for this vehicle from cloud
-        const toDelete = entries.filter(e => e.registration === rego);
+        // Delete all entries for this vehicle from cloud. Read from the ref
+        // so a cloud refresh between click and confirm doesn't strand entries
+        // added from other devices.
+        const current = entriesRef.current;
+        const toDelete = current.filter(e => e.registration === rego);
         for (const e of toDelete) { db.deleteEntry(e.id).catch(() => {}); }
-        await persist(entries.filter(e => e.registration !== rego));
+        await persist(current.filter(e => e.registration !== rego));
         if (serviceData[rego]) {
           const { [rego]: _, ...rest } = serviceData;
           await persistService(rest);
@@ -5403,7 +5442,10 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       showToast(`${finalRego} already exists in vehicle database`, "warn");
       return;
     }
-    const updated = entries.map(e =>
+    // entriesRef.current reflects the latest cloud state — the edit modal
+    // was open while refresh was paused, but we still prefer the ref for
+    // consistency with all other save paths.
+    const updated = entriesRef.current.map(e =>
       e.registration === rego
         ? { ...e, registration: finalRego, division: newDivision, vehicleType: newVehicleType, vehicleName: cleanName || e.vehicleName || "" }
         : e
@@ -7603,9 +7645,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         _cardRawRead: cardData?._rawCardRead || null,
         _cardAiIssues: cardData?._aiIssues || null,
       };
-      const newEntries = insertChronological(entries, entry);
+      const newEntries = insertChronological(entriesRef.current, entry);
+      // persist() already saves to Supabase — the explicit saveEntry below was
+      // a duplicate that doubled network traffic and opened a race window.
       await persist(newEntries, entry);
-      db.saveEntry(entry).catch(() => {});
       if (receiptB64) await saveReceiptImage(entry.id, receiptB64, receiptMime);
       learnFromSubmission(entry);
     } else {
@@ -7631,9 +7674,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         hasReceipt: !!receiptB64,
         linkedVehicle: draft.linkedVehicle || "",
       };
-      const newEntries = [...entries, entry];
+      const newEntries = [...entriesRef.current, entry];
+      // persist() already saves to Supabase — the explicit saveEntry below was
+      // a duplicate that doubled network traffic and opened a race window.
       await persist(newEntries, entry);
-      db.saveEntry(entry).catch(() => {});
       if (receiptB64) await saveReceiptImage(entry.id, receiptB64, receiptMime);
     }
 
@@ -12035,7 +12079,9 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           division={manualEntry.division}
           vehicleType={manualEntry.vehicleType}
           onSave={async (entry) => {
-            const newEntries = insertChronological(entries, entry);
+            // Use the ref so a Realtime refresh that snuck in while the modal
+            // was open doesn't cause us to write a stale entries array back.
+            const newEntries = insertChronological(entriesRef.current, entry);
             await persist(newEntries, entry);
             setManualEntry(null);
             setExpandedRego(entry.registration);
