@@ -1,5 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import * as XLSX from "xlsx";
+// xlsx-js-style is an API-compatible fork of xlsx that supports cell styling
+// (fills, fonts, borders). Used only by the reconciliation export so the
+// other xlsx exports stay on the lighter stock library.
+import * as XLSXStyle from "xlsx-js-style";
 import { createClient } from "@supabase/supabase-js";
 
 // ─── Supabase setup ─────────────────────────────────────────────────────────
@@ -11741,6 +11745,24 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     // fleet-card side only fills the first split row of a group.
     const exportReconciliation = () => {
       try {
+        // Colour map (ARGB format — xlsx-js-style wants 8-hex-digit strings
+        // with a leading opacity pair; FF = fully opaque). Fills chosen to
+        // match the on-screen row tints for instant recognition, with the
+        // status column using the darker accent so it pops.
+        const EXCEL_STATUS = {
+          matched:    { fill: "FFEAF7EF", accent: "FFBBE5C9", text: "FF15803D" },
+          scan_error: { fill: "FFFFF5D6", accent: "FFFCD57F", text: "FFB45309" },
+          missing:    { fill: "FFFDE7E7", accent: "FFFAB5B5", text: "FFB91C1C" },
+          app_only:   { fill: "FFE6EFFE", accent: "FF9EBDFB", text: "FF1D4ED8" },
+        };
+        const BORDER_COL = "FFD1D5DB";
+        const thinBorder = {
+          top:    { style: "thin", color: { rgb: BORDER_COL } },
+          bottom: { style: "thin", color: { rgb: BORDER_COL } },
+          left:   { style: "thin", color: { rgb: BORDER_COL } },
+          right:  { style: "thin", color: { rgb: BORDER_COL } },
+        };
+
         const aoa = [];
         // Title + summary block
         const rangeLabel = reconFromDate === reconToDate ? reconFromDate : `${reconFromDate} to ${reconToDate}`;
@@ -11749,7 +11771,13 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         aoa.push([`Matched: ${matched.length}  ·  Scan Errors: ${scanErrors.length}  ·  Missing Receipt: ${missing.length}  ·  App Only: ${appOnlyGroups.length}  ·  Surcharges filtered: ${surchargeTxns.length}`]);
         if (reconFilter !== "all") aoa.push([`Filter: ${reconFilter.replace("_", " ")}`]);
         if (reconSearch.trim()) aoa.push([`Search: "${reconSearch.trim()}"`]);
+        // Legend row — one colour swatch per classification
+        aoa.push([
+          "Legend:",
+          "✓ Matched", "", "⚠ Scan Error", "", "✗ Missing Receipt", "", "ⓘ App Only",
+        ]);
         aoa.push([]); // blank row
+        const legendRowIdx = aoa.length - 2; // index of the legend row (0-based)
 
         // Section headers row (visual grouping)
         aoa.push([
@@ -11757,21 +11785,24 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           "", // separator col
           "— APP ENTRIES —", "", "", "", "", "", "", "", "", "", "", "",
         ]);
+        const sectionRowIdx = aoa.length - 1;
         // Column headers
         aoa.push([
           "Status", "Date", "Time", "Rego", "Card", "Driver", "Station", "Product", "Litres", "$/L", "Total",
           "",
           "Status", "Date", "Rego", "Driver", "Card", "Station", "Fuel", "Litres", "$/L", "Total", "Receipt", "Split",
         ]);
+        const headerColsRowIdx = aoa.length - 1;
+        const firstDataRowIdx = aoa.length; // data starts at this 0-based row
 
-        // Data rows
+        // Track status per data row so we can style each appropriately
+        const dataRowStatuses = [];
+
         for (const r of displayRows) {
           const st = statusStyle[r.status];
           const statusLabel = st?.title || r.status;
+          dataRowStatuses.push(r.status);
 
-          // FleetCard side — only render the txn once (on splitIdx === 0).
-          // Continuation rows show a "↳ same transaction" marker so the
-          // exported file reads the same way the screen does.
           let fleetCardCols;
           if (r.txn && r.splitIdx === 0) {
             fleetCardCols = [
@@ -11790,11 +11821,9 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           } else if (r.txn && r.splitIdx > 0) {
             fleetCardCols = ["", "", "", "", "", "", `↳ same transaction (split ${r.splitIdx + 1} of ${r.splitTotal})`, "", "", "", ""];
           } else {
-            // app_only — no txn
             fleetCardCols = [statusLabel, "", "", "", "", "", "— no transaction in report —", "", "", "", ""];
           }
 
-          // App side
           let appCols;
           if (r.entry) {
             appCols = [
@@ -11812,7 +11841,6 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               r.splitTotal > 1 ? `${r.splitIdx + 1}/${r.splitTotal}` : "",
             ];
           } else {
-            // missing receipt — txn with no app entry
             const followUp = r.txn?.driver ? `follow up with ${r.txn.driver}` : "driver unknown";
             appCols = [statusLabel, "", "", "", "", "", `— no receipt lodged (${followUp}) —`, "", "", "", "", ""];
           }
@@ -11820,7 +11848,84 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           aoa.push([...fleetCardCols, "", ...appCols]);
         }
 
-        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        const ws = XLSXStyle.utils.aoa_to_sheet(aoa);
+        const numCols = 24; // A..X
+
+        // Helper — set a style on a cell (creating it if missing).
+        const addrFor = (r, c) => XLSXStyle.utils.encode_cell({ r, c });
+        const setStyle = (r, c, style) => {
+          const addr = addrFor(r, c);
+          if (!ws[addr]) ws[addr] = { v: "", t: "s" };
+          ws[addr].s = { ...(ws[addr].s || {}), ...style };
+        };
+
+        // ── Title / summary block styling (rows 0 through sectionRowIdx-2) ──
+        const summaryBold = { font: { bold: true, sz: 14 }, alignment: { horizontal: "left" } };
+        setStyle(0, 0, { font: { bold: true, sz: 16, color: { rgb: "FF0F172A" } }, alignment: { horizontal: "left" } });
+        setStyle(1, 0, { font: { italic: true, sz: 10, color: { rgb: "FF64748B" } } });
+        setStyle(2, 0, { font: { sz: 11, color: { rgb: "FF374151" } } });
+
+        // ── Legend row — each coloured swatch gets a fill of its status colour ──
+        const legendCells = [
+          { col: 1, status: "matched" },
+          { col: 3, status: "scan_error" },
+          { col: 5, status: "missing" },
+          { col: 7, status: "app_only" },
+        ];
+        setStyle(legendRowIdx, 0, { font: { bold: true, sz: 10, color: { rgb: "FF64748B" } } });
+        legendCells.forEach(({ col, status }) => {
+          const c = EXCEL_STATUS[status];
+          setStyle(legendRowIdx, col, {
+            fill: { patternType: "solid", fgColor: { rgb: c.fill } },
+            font: { bold: true, sz: 10, color: { rgb: c.text } },
+            alignment: { horizontal: "center" },
+            border: thinBorder,
+          });
+        });
+
+        // ── Section headers row — slate background, white bold text ──
+        for (let c = 0; c < numCols; c++) {
+          if (c === 11) continue; // separator column stays blank
+          setStyle(sectionRowIdx, c, {
+            fill: { patternType: "solid", fgColor: { rgb: "FF334155" } },
+            font: { bold: true, sz: 11, color: { rgb: "FFFFFFFF" } },
+            alignment: { horizontal: "center", vertical: "center" },
+          });
+        }
+
+        // ── Column headers row — light slate, bold ──
+        for (let c = 0; c < numCols; c++) {
+          if (c === 11) continue;
+          setStyle(headerColsRowIdx, c, {
+            fill: { patternType: "solid", fgColor: { rgb: "FFE2E8F0" } },
+            font: { bold: true, sz: 10, color: { rgb: "FF0F172A" } },
+            alignment: { horizontal: "center", vertical: "center" },
+            border: thinBorder,
+          });
+        }
+
+        // ── Data rows — colour by status ──
+        for (let i = 0; i < dataRowStatuses.length; i++) {
+          const status = dataRowStatuses[i];
+          const c = EXCEL_STATUS[status] || EXCEL_STATUS.matched;
+          const rowIdx = firstDataRowIdx + i;
+          for (let col = 0; col < numCols; col++) {
+            if (col === 11) continue; // separator stays transparent
+            // Status columns (0 and 12) get the darker accent tint + bold
+            const isStatusCol = col === 0 || col === 12;
+            setStyle(rowIdx, col, {
+              fill: { patternType: "solid", fgColor: { rgb: isStatusCol ? c.accent : c.fill } },
+              font: { bold: isStatusCol, sz: 10, color: { rgb: isStatusCol ? c.text : "FF0F172A" } },
+              alignment: {
+                horizontal: isStatusCol ? "center" : (col >= 8 && col <= 10) || (col >= 19 && col <= 21) ? "right" : "left",
+                vertical: "center",
+                wrapText: false,
+              },
+              border: thinBorder,
+            });
+          }
+        }
+
         // Column widths tuned so the file opens with everything readable
         ws["!cols"] = [
           { wch: 16 }, // L-Status
@@ -11848,24 +11953,32 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           { wch: 9 },  // R-Receipt
           { wch: 7 },  // R-Split
         ];
+        // Row heights — slightly taller header + data rows for readability
+        ws["!rows"] = [];
+        ws["!rows"][sectionRowIdx] = { hpt: 22 };
+        ws["!rows"][headerColsRowIdx] = { hpt: 18 };
+
         // Merge the title + section header rows for readability
-        const headerTextRows = 3 +
+        const textRowCount = 3 +
           (reconFilter !== "all" ? 1 : 0) +
           (reconSearch.trim() ? 1 : 0);
-        const sectionRowIdx = headerTextRows + 1; // after blank
         ws["!merges"] = [
-          ...Array.from({ length: headerTextRows }, (_, i) => ({ s: { r: i, c: 0 }, e: { r: i, c: 23 } })),
+          ...Array.from({ length: textRowCount }, (_, i) => ({ s: { r: i, c: 0 }, e: { r: i, c: numCols - 1 } })),
           { s: { r: sectionRowIdx, c: 0 },  e: { r: sectionRowIdx, c: 10 } }, // "— FLEET CARD REPORT —"
-          { s: { r: sectionRowIdx, c: 12 }, e: { r: sectionRowIdx, c: 23 } }, // "— APP ENTRIES —"
+          { s: { r: sectionRowIdx, c: 12 }, e: { r: sectionRowIdx, c: numCols - 1 } }, // "— APP ENTRIES —"
         ];
+        // Freeze the header area (below the column-headers row) so scrolling
+        // keeps the labels and title in view.
+        ws["!freeze"] = { xSplit: "0", ySplit: String(firstDataRowIdx), topLeftCell: addrFor(firstDataRowIdx, 0), activePane: "bottomLeft", state: "frozen" };
+        ws["!views"] = [{ state: "frozen", ySplit: firstDataRowIdx, xSplit: 0, topLeftCell: addrFor(firstDataRowIdx, 0) }];
 
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Reconciliation");
+        const wb = XLSXStyle.utils.book_new();
+        XLSXStyle.utils.book_append_sheet(wb, ws, "Reconciliation");
 
         const fileRange = reconFromDate === reconToDate ? reconFromDate : `${reconFromDate}_to_${reconToDate}`;
         const filterTag = reconFilter !== "all" ? `_${reconFilter}` : "";
         const filename = `Reconciliation_${fileRange}${filterTag}.xlsx`;
-        XLSX.writeFile(wb, filename);
+        XLSXStyle.writeFile(wb, filename);
         showToast(`Exported ${displayRows.length} row${displayRows.length !== 1 ? "s" : ""} to ${filename}`);
       } catch (err) {
         console.error("Reconciliation export failed:", err);
