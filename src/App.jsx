@@ -254,6 +254,30 @@ const db = {
 // ─── Storage compatibility layer ────────────────────────────────────────────
 // localStorage acts as a fast local cache. Supabase is the cloud "source of truth".
 // If Supabase is unavailable, the app still works using localStorage alone.
+//
+// Quota handling: browsers cap localStorage at ~5–10MB per origin. Without
+// protection, a bloated cache (primarily receipt image blobs) would cause
+// every subsequent set() to throw QuotaExceededError silently — swallowed by
+// the .catch(()=>{}) wrappers at call sites, leaving entries.json stuck on
+// the last successful write. The set() below detects quota errors and evicts
+// the oldest receipt images (biggest storage consumers) until the write
+// succeeds. Supabase remains the source of truth, so evicting local copies
+// is safe — they'll re-load on demand.
+function __evictOldestReceiptImages(targetToFree = 1) {
+  const imgKeys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith("fuel_receipt_img_")) imgKeys.push(k);
+  }
+  // Evict in insertion order (oldest localStorage entries are typically first).
+  // Without a dedicated LRU timestamp, this is a reasonable heuristic.
+  let evicted = 0;
+  for (const k of imgKeys) {
+    if (evicted >= targetToFree) break;
+    try { localStorage.removeItem(k); evicted++; } catch (_) {}
+  }
+  return evicted;
+}
 if (!window.storage) {
   window.storage = {
     async get(key) {
@@ -261,7 +285,25 @@ if (!window.storage) {
       return v !== null ? { value: v } : null;
     },
     async set(key, value) {
-      localStorage.setItem(key, value);
+      try {
+        localStorage.setItem(key, value);
+      } catch (err) {
+        const isQuota = err && (err.name === "QuotaExceededError" ||
+          err.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+          err.code === 22 || err.code === 1014);
+        if (!isQuota) throw err;
+        // Quota hit — try to free space and retry up to 3 times. Evict receipt
+        // images first (largest), then give up and re-throw so the caller can
+        // surface a warning if it wants to.
+        console.warn(`[Storage] Quota exceeded writing "${key}" — evicting oldest receipt image caches`);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const freed = __evictOldestReceiptImages(5);
+          if (freed === 0) break; // nothing left to evict
+          try { localStorage.setItem(key, value); return; } catch (_) { /* retry */ }
+        }
+        console.error(`[Storage] Still over quota for "${key}" after evictions — data not cached locally (Supabase remains source of truth)`);
+        throw err;
+      }
     },
     async delete(key) {
       localStorage.removeItem(key);
@@ -549,6 +591,16 @@ async function compressImage(file, rotation = 0) {
 // because fleet drivers' phones can be set to any timezone and the app itself
 // runs in Sydney (AEST/AEDT). Using device local time caused false "future date"
 // flags early in the morning when device TZ was UTC.
+// Parse a value that may be a number, numeric string, or empty. Returns a
+// finite number (including 0) or null. Unlike the `parseFloat(x) || null`
+// idiom scattered through older code, this preserves a legitimate zero
+// instead of silently dropping $0 costs, 0-litre entries, etc.
+const toNum = (v) => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "number" ? v : parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+};
+
 const sydneyTodayYMD = () => {
   // Returns {y, m, d} of today's calendar date in Australia/Sydney.
   const str = new Intl.DateTimeFormat("en-CA", {
@@ -571,7 +623,12 @@ const isAfterSydneyToday = (dateStr) => {
   let dd = parseInt(parts[1], 10);
   let mm = parseInt(parts[2], 10);
   let yy = parseInt(parts[3], 10);
+  // Reject nonsense values before any comparison. Previously malformed
+  // inputs could slip through and get persisted as epoch-adjacent dates.
+  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yy)) return false;
+  if (dd < 1 || dd > 31 || mm < 1 || mm > 12) return false;
   if (yy < 100) yy += 2000;
+  if (yy < 2000 || yy > new Date().getFullYear() + 1) return false;
   const t = sydneyTodayYMD();
   if (yy !== t.y) return yy > t.y;
   if (mm !== t.m) return mm > t.m;
@@ -840,11 +897,16 @@ function normalizeStationName(rawStation, learnedCorrections) {
       console.log(`[Learn] Station fuzzy-matched: "${rawStation}" → "${mapping.canonical}"`);
       return mapping.canonical;
     }
-    // Edit distance check (only for short station names to avoid false positives)
-    if (cleaned.length <= 20 && storedCleaned.length <= 20 && typeof editDistance === "function") {
+    // Edit distance check — tightened to dist ≤ 1 plus minimum length, so
+    // short-name coincidences (e.g. "BP 1" vs "BP 7") don't auto-merge and
+    // nearby-but-distinct sites stay separate. The exact / punct-cleaned
+    // comparisons above still handle the common "Shell Penrith." vs "Shell
+    // Penrith" case at dist=0.
+    const minLen = Math.min(cleaned.length, storedCleaned.length);
+    if (minLen >= 6 && cleaned.length <= 40 && storedCleaned.length <= 40 && typeof editDistance === "function") {
       const dist = editDistance(cleaned, storedCleaned);
-      if (dist <= 2 && dist < cleaned.length * 0.3) {
-        console.log(`[Learn] Station edit-distance matched (d=${dist}): "${rawStation}" → "${mapping.canonical}"`);
+      if (dist === 1) {
+        console.log(`[Learn] Station edit-distance matched (d=1): "${rawStation}" → "${mapping.canonical}"`);
         return mapping.canonical;
       }
     }
@@ -930,8 +992,12 @@ function normalizeReceiptData(data, learnedCorrections) {
     totalCost: typeof data.totalCost === "number" ? data.totalCost : null,
     confidenceOverall: (data.confidence?.overall || "").toLowerCase(),
   };
-  // Auto-correct year misreads: if scanned date has wrong year but same day/month,
-  // fix to current year (e.g. "01/04/2025" → "01/04/2026" when current year is 2026)
+  // Auto-correct year misreads: ONLY when the day+month strongly suggest the
+  // receipt is from the last couple of weeks but the year got AI-misread
+  // (e.g. "01/04/2025" → "01/04/2026"). Previously this also triggered on
+  // `withinReasonableRange` (any ±1-year difference) which silently rewrote
+  // legitimately-old receipts. Now we require day+month to be within 7 days
+  // of today AND the year to be exactly one off.
   if (data.date) {
     const scannedTs = parseDate(data.date);
     if (scannedTs) {
@@ -939,11 +1005,14 @@ function normalizeReceiptData(data, learnedCorrections) {
       const now = new Date();
       const currentYear = now.getFullYear();
       const scannedYear = scanned.getFullYear();
-      // If year differs but day+month match (or are very close), it's a year misread
-      if (scannedYear !== currentYear && Math.abs(scannedYear - currentYear) <= 2) {
-        const dayMonthMatch = scanned.getMonth() === now.getMonth() && Math.abs(scanned.getDate() - now.getDate()) <= 3;
-        const withinReasonableRange = Math.abs(scannedYear - currentYear) === 1;
-        if (dayMonthMatch || withinReasonableRange) {
+      const yearOffByOne = Math.abs(scannedYear - currentYear) === 1;
+      if (yearOffByOne) {
+        // Compute day-of-year difference (mod 365) so Dec 30 vs Jan 2 counts as close
+        const scannedDoy = Math.floor((scanned - new Date(Date.UTC(scannedYear, 0, 1))) / 86400000);
+        const nowDoy = Math.floor((now - new Date(Date.UTC(currentYear, 0, 1))) / 86400000);
+        const rawDiff = Math.abs(scannedDoy - nowDoy);
+        const doyDiff = Math.min(rawDiff, 365 - rawDiff);
+        if (doyDiff <= 7) {
           // Replace year in the date string
           const oldYear2 = String(scannedYear).slice(-2);
           const oldYear4 = String(scannedYear);
@@ -953,7 +1022,7 @@ function normalizeReceiptData(data, learnedCorrections) {
           if (fixed.includes(oldYear4)) fixed = fixed.replace(oldYear4, newYear4);
           else if (fixed.includes(oldYear2)) fixed = fixed.replace(new RegExp(`\\b${oldYear2}\\b`), newYear2);
           if (fixed !== data.date) {
-            console.log(`[Date Fix] Year auto-corrected: "${data.date}" → "${fixed}"`);
+            console.log(`[Date Fix] Year auto-corrected (near-today match): "${data.date}" → "${fixed}"`);
             data._originalDate = data.date;
             data.date = fixed;
           }
@@ -1972,7 +2041,7 @@ async function claudeScan(apiKey, b64, mime, prompt) {
 }
 
 function parseDate(str) {
-  if (!str) return 0;
+  if (!str || typeof str !== "string") return 0;
   // Strip ordinal suffixes (e.g. "16th" → "16") and month names → numbers
   let cleaned = str.trim()
     .replace(/(\d+)(st|nd|rd|th)/gi, "$1")
@@ -1998,9 +2067,22 @@ function parseDate(str) {
   if (y >= 0 && y <= 99) {
     y += y <= 49 ? 2000 : 1900;
   }
-  // Validate parts are reasonable
+  // Basic range checks
   if (!y || !m || !d || m < 1 || m > 12 || d < 1 || d > 31) return 0;
-  return Date.UTC(y, m - 1, d);
+  // Year sanity: fleet tracker sees modern receipts only. Reject obviously
+  // bogus years so a "50" or "1995" misread doesn't persist as epoch-adjacent
+  // garbage that silently sorts to the top of reports. Window is wide enough
+  // to tolerate historical-data entry (2000+) but rejects future typos.
+  const currentYear = new Date().getFullYear();
+  if (y < 2000 || y > currentYear + 1) return 0;
+  // Round-trip validation: reject impossible combinations like 30/02/2024
+  // that JavaScript's Date would silently roll over (Feb 30 → Mar 1–2). Without
+  // this, odometer cross-checks and date-based sorts operate on a different
+  // date than what the receipt claims.
+  const ts = Date.UTC(y, m - 1, d);
+  const rt = new Date(ts);
+  if (rt.getUTCFullYear() !== y || rt.getUTCMonth() !== m - 1 || rt.getUTCDate() !== d) return 0;
+  return ts;
 }
 
 // Insert a new entry in chronological order for its vehicle.
@@ -4080,13 +4162,38 @@ export default function App() {
     persistService(updated, rego);
   };
 
+  // Keep learnedDB bounded so it can't grow past the 1MB app_settings.value
+  // soft-cap or eat disproportionate localStorage quota. Fleet size is well
+  // under 500 in practice — this cap only bites if stray/phantom regos leak
+  // in from AI misreads. Eviction prefers entries whose data is thinnest
+  // (only a `dr` field, no type/division/name) and that haven't been
+  // updated recently.
+  const LEARNED_DB_CAP = 500;
+  const trimLearnedDB = (db) => {
+    if (!db || typeof db !== "object") return db;
+    const keys = Object.keys(db);
+    if (keys.length <= LEARNED_DB_CAP) return db;
+    const richness = (v) => (v?.t ? 2 : 0) + (v?.d ? 2 : 0) + (v?.n ? 1 : 0) + (v?.dr ? 1 : 0) + (v?.c ? 2 : 0);
+    const sortedKeys = keys.sort((a, b) => {
+      const rA = richness(db[a]);
+      const rB = richness(db[b]);
+      if (rA !== rB) return rA - rB; // thinner entries evicted first
+      return a.localeCompare(b); // stable tiebreaker
+    });
+    const toEvict = sortedKeys.slice(0, keys.length - LEARNED_DB_CAP);
+    const trimmed = { ...db };
+    toEvict.forEach(k => delete trimmed[k]);
+    console.log(`[Learned DB] Trimmed ${toEvict.length} entries to stay under ${LEARNED_DB_CAP} cap`);
+    return trimmed;
+  };
   const persistLearned = async (newData) => {
-    learnedDBRef.current = newData; // sync ref immediately so subsequent calls see latest
-    try { await window.storage.set("fuel_learned_db", JSON.stringify(newData)); setLearnedDB(newData); }
-    catch (_) { setLearnedDB(newData); }
+    const trimmed = trimLearnedDB(newData);
+    learnedDBRef.current = trimmed; // sync ref immediately so subsequent calls see latest
+    try { await window.storage.set("fuel_learned_db", JSON.stringify(trimmed)); setLearnedDB(trimmed); }
+    catch (_) { setLearnedDB(trimmed); }
     // Also sync to cloud so edits on one device reach the others (without this,
     // "Edit Vehicle" and other learnedDB changes stayed stuck on one computer).
-    db.saveSetting("learned_db", JSON.stringify(newData)).catch(() => {});
+    db.saveSetting("learned_db", JSON.stringify(trimmed)).catch(() => {});
   };
 
   // persistResolved saves flag resolutions to both local and cloud
@@ -5183,6 +5290,12 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     let nextLineIdx = 0; // tracks which receipt line to match next
     let nextOtherIdx = 0; // tracks which otherItem to match next
 
+    // Single group-id shared by every entry derived from this one receipt scan
+    // (primary, vehicle splits, "other" splits, AND any pending extras the
+    // user later confirms on Step 4). Lets us regroup multi-pump receipts
+    // retroactively — the DB column existed but was never populated.
+    const splitGroupId = `sg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+
     const buildEntry = (rego, division, vehicleType, odometer, litres, regoMatch, matchedLine, userPplOverride) => {
       const lineFuelType = matchedLine?.fuelType || baseFuelType || regoMatch?.f || "";
       const parsedLitres = parseFloat(litres) || null;
@@ -5233,6 +5346,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
         fleetCardDriver: regoMatch?.dr || "",
         vehicleName: regoMatch?.n || "",
         splitReceipt: splitMode || false,
+        splitGroup: splitGroupId,
         hasReceipt: !!receiptB64,
         _aiConfidence: receiptData?.confidence?.overall || null,
         _aiIssues: [...(receiptData?.confidence?.issues || []), ...(receiptData?._mathIssues || [])],
@@ -5419,6 +5533,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
             fuelType: sp._fuelTypeOverride || matchedFuelLine?.fuelType || (matchedOther ? matchedOther.description : baseFuelType),
             notes,
             splitReceipt: true,
+            splitGroup: splitGroupId,
             hasReceipt: !!receiptB64,
             linkedVehicle: linkedRego,
           };
@@ -5496,6 +5611,9 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
             _type: "vehicle",
             _sourceLabel: line.fuelType || "Fuel",
             _line: line,
+            // Propagate split-group so the pending-extras entry (when later
+            // confirmed via savePendingExtra) shares the primary entry's group.
+            _splitGroup: splitGroupId,
             rego: "",
             division: "",
             vehicleType: "",
@@ -5518,6 +5636,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
             _type: "other",
             _sourceLabel: item.description || "Other item",
             _item: item,
+            _splitGroup: splitGroupId,
             equipment: item.description || "",
             litres: item.litres || null,
             pricePerLitre: item.pricePerLitre || null,
@@ -5539,13 +5658,46 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     setStep(4);
   };
 
+  // Collect the resolved-flag IDs that belong to a given entry, so deleting
+  // the entry also cleans up its flag-resolution state. Without this, the
+  // resolvedFlags table grows forever, and if a later entry ever produces
+  // the same rego+date+odo tuple it would auto-inherit the stale resolution.
+  const collectOrphanFlagIds = (entry) => {
+    if (!entry) return [];
+    const rego = entry.registration || "";
+    const date = entry.date || "";
+    const odo = entry.odometer != null ? String(entry.odometer) : "";
+    const orphans = [];
+    for (const fid of Object.keys(resolvedFlags)) {
+      // flagId format: `${rego}::${text}::${date}::${odo}` — text may contain
+      // "::", so split by it and take first/last fields only.
+      const parts = fid.split("::");
+      if (parts.length < 4) continue;
+      const fRego = parts[0];
+      const fOdo = parts[parts.length - 1];
+      const fDate = parts[parts.length - 2];
+      if (fRego === rego && fDate === date && fOdo === odo) orphans.push(fid);
+    }
+    return orphans;
+  };
+
   const deleteEntry = async (id) => {
     // Read from the ref, not the closure-captured `entries` — a Realtime
     // refresh between render and click would otherwise make us persist a
     // stale array and silently delete entries added on other devices.
+    const entry = entriesRef.current.find(e => e.id === id);
+    const orphanFlags = collectOrphanFlagIds(entry);
     await persist(entriesRef.current.filter(e => e.id !== id));
     db.deleteEntry(id).catch(() => {});
     await deleteReceiptImage(id);
+    // Cleanup orphan flag resolutions so they can't silently auto-resolve a
+    // future entry that happens to share this entry's rego+date+odo tuple.
+    if (orphanFlags.length > 0) {
+      const rest = { ...resolvedFlags };
+      orphanFlags.forEach(fid => { delete rest[fid]; });
+      await persistResolved(rest);
+      orphanFlags.forEach(fid => db.deleteResolvedFlag(fid).catch(() => {}));
+    }
     showToast("Entry deleted");
   };
 
@@ -5604,8 +5756,18 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
         // added from other devices.
         const current = entriesRef.current;
         const toDelete = current.filter(e => e.registration === rego);
+        // Collect orphan flag IDs for every entry we're deleting, so we can
+        // purge resolvedFlags in one pass after the entry persist.
+        const orphanFlags = new Set();
+        toDelete.forEach(e => collectOrphanFlagIds(e).forEach(fid => orphanFlags.add(fid)));
         for (const e of toDelete) { db.deleteEntry(e.id).catch(() => {}); }
         await persist(current.filter(e => e.registration !== rego));
+        if (orphanFlags.size > 0) {
+          const rest = { ...resolvedFlags };
+          orphanFlags.forEach(fid => { delete rest[fid]; });
+          await persistResolved(rest);
+          orphanFlags.forEach(fid => db.deleteResolvedFlag(fid).catch(() => {}));
+        }
         if (serviceData[rego]) {
           const { [rego]: _, ...rest } = serviceData;
           await persistService(rest);
@@ -7808,16 +7970,24 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         registration: draft.rego.trim().toUpperCase(),
         division: draft.division || match?.d || getDivision(draft.vehicleType),
         vehicleType: draft.vehicleType || match?.t || "",
-        odometer: parseFloat(draft.odometer) || null,
+        odometer: toNum(draft.odometer),
         date: draft.date,
-        litres: draft.litres || null,
-        pricePerLitre: draft.pricePerLitre || null,
-        totalCost: draft.cost || ((draft.litres || 0) * (draft.pricePerLitre || 0)) || null,
+        litres: toNum(draft.litres),
+        pricePerLitre: toNum(draft.pricePerLitre),
+        // Prefer explicit cost; else compute litres × ppl. toNum() preserves
+        // a legitimate $0 (unlike `|| null`, which dropped zero silently).
+        totalCost: (() => {
+          const explicit = toNum(draft.cost);
+          if (explicit !== null) return explicit;
+          const l = toNum(draft.litres), p = toNum(draft.pricePerLitre);
+          return (l !== null && p !== null) ? l * p : null;
+        })(),
         station: draft.station,
         fuelType: draft.fuelType || match?.f || "",
         fleetCardNumber: draft.fleetCardNumber || match?.c || "",
         cardRego: cardData?.vehicleOnCard || "",
         splitReceipt: true,
+        splitGroup: draft._splitGroup || null,
         hasReceipt: !!receiptB64,
         _aiConfidence: receiptData?.confidence?.overall || null,
         _aiIssues: ["Auto-detected extra fuel line from receipt"],
@@ -7854,12 +8024,20 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         fleetCardNumber: draft.fleetCardNumber || "",
         cardRego: cardData?.vehicleOnCard || "",
         date: draft.date,
-        litres: draft.litres || null,
-        pricePerLitre: draft.pricePerLitre || null,
-        totalCost: draft.cost || ((draft.litres || 0) * (draft.pricePerLitre || 0)) || null,
+        litres: toNum(draft.litres),
+        pricePerLitre: toNum(draft.pricePerLitre),
+        // Prefer explicit cost; else compute litres × ppl. toNum() preserves
+        // a legitimate $0 (unlike `|| null`, which dropped zero silently).
+        totalCost: (() => {
+          const explicit = toNum(draft.cost);
+          if (explicit !== null) return explicit;
+          const l = toNum(draft.litres), p = toNum(draft.pricePerLitre);
+          return (l !== null && p !== null) ? l * p : null;
+        })(),
         fuelType: draft._sourceLabel || "",
         notes: "",
         splitReceipt: true,
+        splitGroup: draft._splitGroup || null,
         hasReceipt: !!receiptB64,
         linkedVehicle: draft.linkedVehicle || "",
       };
