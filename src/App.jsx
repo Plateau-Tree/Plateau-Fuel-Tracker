@@ -3464,6 +3464,10 @@ export default function App() {
   const [storageReady, setStorageReady] = useState(false);
   const [toast, setToast] = useState(null);
   const [error, setError] = useState("");
+  // Cross-device sync tracking: timestamp of last successful cloud refresh
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const lastRefreshAttemptRef = useRef(0); // debouncing guard
 
   const [apiKey, setApiKey] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
@@ -3757,6 +3761,18 @@ export default function App() {
           db.loadSetting("learned_corrections").then(raw => {
             if (raw) { try { setLearnedCorrections(JSON.parse(raw)); } catch (_) {} }
           }).catch(() => {});
+          // Load learned DB (per-rego vehicle metadata) from cloud. Without this,
+          // "Edit Vehicle" and similar admin edits stayed stuck on one device.
+          db.loadSetting("learned_db").then(raw => {
+            if (raw) {
+              try {
+                const parsed = JSON.parse(raw);
+                setLearnedDB(parsed);
+                learnedDBRef.current = parsed;
+                try { window.storage.set("fuel_learned_db", JSON.stringify(parsed)); } catch (_) {}
+              } catch (_) {}
+            }
+          }).catch(() => {});
         }
 
         // ── One-time name corrections migration (v1) ──
@@ -3915,6 +3931,8 @@ export default function App() {
           }
         } catch (_) {}
       } catch (_) {}
+      // Record first successful sync (so the admin "last synced" indicator is meaningful)
+      if (supabase) setLastSyncedAt(new Date());
       setStorageReady(true);
     })();
   }, []);
@@ -3949,6 +3967,9 @@ export default function App() {
     learnedDBRef.current = newData; // sync ref immediately so subsequent calls see latest
     try { await window.storage.set("fuel_learned_db", JSON.stringify(newData)); setLearnedDB(newData); }
     catch (_) { setLearnedDB(newData); }
+    // Also sync to cloud so edits on one device reach the others (without this,
+    // "Edit Vehicle" and other learnedDB changes stayed stuck on one computer).
+    db.saveSetting("learned_db", JSON.stringify(newData)).catch(() => {});
   };
 
   // persistResolved saves flag resolutions to both local and cloud
@@ -3963,6 +3984,134 @@ export default function App() {
       }
     }
   };
+
+  // ── Cross-device refresh ───────────────────────────────────────────────────
+  // Pulls the latest shared data from Supabase and updates local state +
+  // localStorage cache. Called on mount, when the tab regains visibility /
+  // focus, on a periodic interval while visible, and whenever Supabase
+  // Realtime pushes a change. Debounced so rapid-fire triggers don't thrash.
+  const refreshFromCloud = useCallback(async ({ silent = true, force = false } = {}) => {
+    if (!supabase) return;
+    const now = Date.now();
+    // Debounce: skip if we just refreshed <2s ago, unless force=true
+    if (!force && now - lastRefreshAttemptRef.current < 2000) return;
+    lastRefreshAttemptRef.current = now;
+    setIsSyncing(true);
+    try {
+      const [cloudEntries, cloudService, cloudResolved, cloudApiKey] = await Promise.all([
+        db.loadEntries().catch(() => null),
+        db.loadServiceData().catch(() => null),
+        db.loadResolvedFlags().catch(() => null),
+        db.loadSetting("anthropic_api_key").catch(() => null),
+      ]);
+      if (cloudEntries) {
+        setEntries(cloudEntries);
+        entriesRef.current = cloudEntries;
+        try { await window.storage.set("fuel_entries", JSON.stringify(cloudEntries)); } catch (_) {}
+      }
+      if (cloudService) {
+        setServiceData(cloudService);
+        try { await window.storage.set("fuel_service_data", JSON.stringify(cloudService)); } catch (_) {}
+      }
+      if (cloudResolved) {
+        setResolvedFlags(cloudResolved);
+        try { await window.storage.set("fuel_resolved_flags", JSON.stringify(cloudResolved)); } catch (_) {}
+      }
+      if (cloudApiKey) {
+        setApiKey(cloudApiKey);
+        setApiKeyInput(cloudApiKey);
+      }
+      // Fire-and-forget the settings-backed collections
+      db.loadFleetCardTransactions().then(txns => { if (txns) setFleetCardTxns(txns); }).catch(() => {});
+      db.loadSetting("learned_card_mappings").then(raw => {
+        if (!raw) return;
+        try {
+          const loaded = JSON.parse(raw);
+          const { reconciled, changed } = reconcileCardMappingsWithDB(loaded);
+          setLearnedCardMappings(reconciled);
+          learnedCardMappingsRef.current = reconciled;
+          try { window.storage.set("fuel_learned_card_mappings", JSON.stringify(reconciled)); } catch (_) {}
+          if (changed > 0) db.saveSetting("learned_card_mappings", JSON.stringify(reconciled)).catch(() => {});
+        } catch (_) {}
+      }).catch(() => {});
+      db.loadSetting("learned_corrections").then(raw => {
+        if (!raw) return;
+        try {
+          const lc = JSON.parse(raw);
+          setLearnedCorrections(lc);
+          learnedCorrectionsRef.current = lc;
+          try { window.storage.set("fuel_learned_corrections", JSON.stringify(lc)); } catch (_) {}
+        } catch (_) {}
+      }).catch(() => {});
+      db.loadSetting("learned_db").then(raw => {
+        if (!raw) return;
+        try {
+          const parsed = JSON.parse(raw);
+          setLearnedDB(parsed);
+          learnedDBRef.current = parsed;
+          try { window.storage.set("fuel_learned_db", JSON.stringify(parsed)); } catch (_) {}
+        } catch (_) {}
+      }).catch(() => {});
+      setLastSyncedAt(new Date());
+      if (!silent) showToast("Synced from cloud");
+    } catch (err) {
+      console.error("[Sync] refreshFromCloud failed:", err);
+      if (!silent) showToast("Sync failed — check connection", "error");
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [showToast]);
+
+  // ── Automatic cross-device sync triggers ───────────────────────────────────
+  // Runs AFTER the initial mount load has set up state. Ensures admin edits
+  // from one computer reach others quickly:
+  //   1) Tab becomes visible again → refresh
+  //   2) Window regains focus → refresh
+  //   3) Supabase Realtime push on fuel_entries / app_settings / service_data /
+  //      resolved_flags → refresh
+  //   4) Periodic 60s interval while tab is visible → safety net
+  useEffect(() => {
+    if (!supabase || !storageReady) return;
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") refreshFromCloud({ silent: true });
+    };
+    const handleFocus = () => refreshFromCloud({ silent: true });
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", handleFocus);
+
+    // Periodic poll (60s) — only when the tab is visible.
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") refreshFromCloud({ silent: true });
+    }, 60_000);
+
+    // Realtime subscriptions — push-based near-instant updates. If Realtime
+    // isn't enabled on a table in the Supabase dashboard, the subscribe will
+    // simply no-op and we fall back to the focus/interval triggers above.
+    const channels = [];
+    try {
+      const triggerRefresh = () => refreshFromCloud({ silent: true });
+      const mkChannel = (name, table) =>
+        supabase
+          .channel(`sync-${name}`)
+          .on("postgres_changes", { event: "*", schema: "public", table }, triggerRefresh)
+          .subscribe();
+      channels.push(mkChannel("entries", "fuel_entries"));
+      channels.push(mkChannel("settings", "app_settings"));
+      channels.push(mkChannel("service", "service_data"));
+      channels.push(mkChannel("flags", "resolved_flags"));
+    } catch (err) {
+      console.warn("[Sync] Realtime subscribe failed — relying on focus/interval:", err);
+    }
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", handleFocus);
+      clearInterval(interval);
+      channels.forEach(ch => { try { supabase.removeChannel(ch); } catch (_) {} });
+    };
+  }, [storageReady, refreshFromCloud]);
 
   // Generate a stable unique ID for a flag
   const flagId = (f) => `${f.rego}::${f.text}::${f.date || ""}::${f.odo || ""}`;
@@ -11427,6 +11576,46 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               onConfirm: async () => { await persistResolved({}); setConfirmAction(null); showToast("Resolved history cleared"); }
             })} style={{ padding: "8px 16px", background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac", borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>Clear resolved history</button>
           )}
+        </div>
+      </div>
+
+      {/* Cloud Sync */}
+      <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#0891b2", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>{"\u2601\uFE0F"} Cloud Sync</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
+          Admin edits sync across all computers automatically — on tab focus, via live push updates, and every minute while open. Tap below to force a refresh now.
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <button
+            disabled={isSyncing || !supabase}
+            onClick={async () => { await refreshFromCloud({ silent: false, force: true }); }}
+            style={{
+              padding: "8px 16px",
+              background: isSyncing ? "#e0f2fe" : "#f0f9ff",
+              color: "#0891b2",
+              border: "1px solid #7dd3fc",
+              borderRadius: 8,
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: isSyncing || !supabase ? "not-allowed" : "pointer",
+              fontFamily: "inherit",
+              opacity: supabase ? 1 : 0.5,
+            }}
+          >{isSyncing ? "Syncing\u2026" : "\uD83D\uDD04 Sync now"}</button>
+          <div style={{ fontSize: 11, color: "#64748b" }}>
+            {!supabase
+              ? "Cloud sync unavailable (no Supabase config)"
+              : lastSyncedAt
+                ? (() => {
+                    const secs = Math.round((Date.now() - lastSyncedAt.getTime()) / 1000);
+                    if (secs < 10) return "Last synced: just now";
+                    if (secs < 60) return `Last synced: ${secs}s ago`;
+                    const mins = Math.round(secs / 60);
+                    if (mins < 60) return `Last synced: ${mins} min ago`;
+                    return `Last synced: ${lastSyncedAt.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}`;
+                  })()
+                : "Not yet synced"}
+          </div>
         </div>
       </div>
 
