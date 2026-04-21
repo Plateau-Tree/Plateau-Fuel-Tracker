@@ -11550,102 +11550,137 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         })
       : [];
 
-    // Color palette per status
+    // Row-level background tint per status (light tint so cells stay legible)
     const statusStyle = {
-      matched:    { label: "\u2713 Matched",          bg: "#f0fdf4", border: "#86efac", text: "#15803d" },
-      scan_error: { label: "\u26A0 Possible Scan Error", bg: "#fffbeb", border: "#fcd34d", text: "#b45309" },
-      missing:    { label: "\u2717 Missing Receipt",  bg: "#fef2f2", border: "#fca5a5", text: "#dc2626" },
-      app_only:   { label: "\u24D8 In App Only",      bg: "#eff6ff", border: "#93c5fd", text: "#1d4ed8" },
+      matched:    { bg: "#f0fdf4", bgAlt: "#fafffc", border: "#86efac", text: "#15803d", label: "\u2713",  title: "Matched" },
+      scan_error: { bg: "#fffbeb", bgAlt: "#fffcf2", border: "#fcd34d", text: "#b45309", label: "\u26A0",  title: "Scan error" },
+      missing:    { bg: "#fef2f2", bgAlt: "#fff7f7", border: "#fca5a5", text: "#dc2626", label: "\u2717",  title: "Missing receipt" },
+      app_only:   { bg: "#eff6ff", bgAlt: "#f7fafe", border: "#93c5fd", text: "#1d4ed8", label: "\u24D8",  title: "App only" },
     };
 
-    // Panel that renders one transaction row (or an app-only group — txn=null)
-    const renderTxnCard = (txn, group, status, diff) => {
-      const st = statusStyle[status] || statusStyle.matched;
-      const mergedCount = group?.entries?.length || 0;
-      const isMerged = mergedCount > 1;
-      return (
-        <div key={txn?.id || group?.key} style={{
-          background: "white", border: `1px solid ${st.border}`,
-          borderRadius: 10, overflow: "hidden",
-        }}>
-          {/* Status header */}
-          <div style={{
-            padding: "6px 12px", fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase",
-            background: st.bg, color: st.text,
-            display: "flex", justifyContent: "space-between", alignItems: "center",
-          }}>
-            <span>{st.label}</span>
-            <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              {isMerged && (
-                <span style={{ fontWeight: 600, fontSize: 10, background: "white", color: st.text, padding: "1px 6px", borderRadius: 4, border: `1px solid ${st.border}` }}>
-                  {mergedCount} splits merged
-                </span>
-              )}
-              {(txn?.date || group?.date) && <span style={{ fontWeight: 500, opacity: 0.8 }}>{txn?.date || group?.date}</span>}
-            </span>
-          </div>
-          <div style={{ padding: "10px 12px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 12 }}>
-              {/* FleetCard side */}
-              {txn ? (
-                <div>
-                  <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, marginBottom: 2 }}>FLEET CARD REPORT</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-                    {txn.rego && <span style={{ fontWeight: 700, color: "#0f172a" }}>{txn.rego}</span>}
-                    {txn.driver && <span style={{ color: "#64748b" }}>{txn.driver}</span>}
-                  </div>
-                  <div style={{ color: "#64748b", marginTop: 2, fontSize: 11 }}>
-                    {txn.litres != null && <span>{txn.litres}L</span>}
-                    {txn.ppl != null && <span> @ ${txn.ppl}/L</span>}
-                    {txn.cost != null && <span style={{ fontWeight: 600, color: "#0f172a" }}> = ${txn.cost.toFixed(2)}</span>}
-                  </div>
-                  {txn.station && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{txn.station}</div>}
-                  {txn.product && <div style={{ fontSize: 10, color: "#94a3b8" }}>{txn.product}</div>}
-                  {txn.time && <div style={{ fontSize: 10, color: "#cbd5e1", marginTop: 2 }}>{txn.time}</div>}
-                  {txn.cardNumber && <div style={{ fontSize: 9, color: "#cbd5e1", marginTop: 2, fontFamily: "monospace" }}>{formatCardNumber(txn.cardNumber)}</div>}
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
-                  <div style={{ fontSize: 12, color: "#1d4ed8", fontWeight: 600 }}>Not in fleet card report</div>
-                  <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
-                    Manual entry or report not yet downloaded
-                  </div>
-                </div>
-              )}
-              {/* App side */}
-              {group ? (
-                <div style={{ borderLeft: "2px solid #e2e8f0", paddingLeft: 10 }}>
-                  <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, marginBottom: 2 }}>APP ENTR{mergedCount > 1 ? "IES" : "Y"}</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-                    {group.registration && <span style={{ fontWeight: 700, color: "#0f172a" }}>{group.registration}</span>}
-                    {group.driverName && <span style={{ color: "#64748b" }}>{group.driverName}</span>}
-                  </div>
-                  <div style={{ color: "#64748b", marginTop: 2, fontSize: 11 }}>
-                    {group.totalLitres > 0 && <span>{group.totalLitres.toFixed(2)}L</span>}
-                    <span style={{ fontWeight: 600, color: "#0f172a" }}> = ${group.totalCost.toFixed(2)}</span>
-                    {isMerged && <span style={{ color: "#94a3b8" }}> (sum of {mergedCount} splits)</span>}
-                  </div>
-                  {group.station && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{group.station}</div>}
-                  {status === "scan_error" && diff != null && (
-                    <div style={{ marginTop: 4, fontSize: 11, fontWeight: 700, color: "#b45309", background: "#fffbeb", padding: "2px 8px", borderRadius: 4, display: "inline-block" }}>
-                      Difference: ${diff.toFixed(2)} {"\u2014"} check the receipt scan
-                    </div>
-                  )}
-                  {group.fleetCardNumber && <div style={{ fontSize: 9, color: "#cbd5e1", marginTop: 2, fontFamily: "monospace" }}>{formatCardNumber(group.fleetCardNumber)}</div>}
-                </div>
-              ) : (
-                <div style={{ borderLeft: "2px solid #fca5a5", paddingLeft: 10, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-                  <div style={{ fontSize: 12, color: "#dc2626", fontWeight: 600 }}>No receipt lodged</div>
-                  <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
-                    {txn?.driver ? `Follow up with ${txn.driver}` : "Driver unknown"}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      );
+    // ── Cell edit commits ────────────────────────────────────────────────
+    // Fleet-card side: mutate the txn object in the fleetCardTxns array and
+    // persist the whole array (Supabase stores the bundle as one JSON blob).
+    const saveTxnEdit = async (txnId, field, rawValue) => {
+      const next = fleetCardTxns.map(t => {
+        if (t.id !== txnId) return t;
+        let v = rawValue;
+        if (field === "cost" || field === "ppl" || field === "litres") {
+          const parsed = parseFloat(String(rawValue).replace(/[$,]/g, ""));
+          v = Number.isFinite(parsed) ? parsed : null;
+        } else if (field === "rego") {
+          v = String(rawValue).toUpperCase().replace(/[^A-Z0-9]/g, "");
+        } else if (typeof rawValue === "string") {
+          v = rawValue.trim();
+        }
+        return { ...t, [field]: v };
+      });
+      setFleetCardTxns(next);
+      try { await db.saveFleetCardTransactions(next); } catch (_) {}
     };
+    const deleteTxn = async (txnId) => {
+      const next = fleetCardTxns.filter(t => t.id !== txnId);
+      setFleetCardTxns(next);
+      try { await db.saveFleetCardTransactions(next); } catch (_) {}
+    };
+
+    // App side: delegate to updateEntry, which handles persist + cloud sync +
+    // odometer re-sort. Safe because the reconciliation view only edits a
+    // single entry at a time (single-entry groups). For multi-entry groups
+    // we show the totals read-only and expose an "Edit splits" affordance.
+    const saveEntryEdit = (entryId, field, rawValue) => {
+      const entry = entriesRef.current.find(e => e.id === entryId);
+      if (!entry) return;
+      let v = rawValue;
+      if (["totalCost", "pricePerLitre", "litres", "odometer"].includes(field)) {
+        const parsed = parseFloat(String(rawValue).replace(/[$,]/g, ""));
+        v = Number.isFinite(parsed) ? parsed : null;
+      } else if (field === "registration") {
+        v = String(rawValue).toUpperCase().replace(/[^A-Z0-9]/g, "");
+      } else if (typeof rawValue === "string") {
+        v = rawValue.trim();
+      }
+      if (entry[field] === v) return; // no-op
+      updateEntry({ ...entry, [field]: v });
+    };
+
+    // ── Build aligned rows ──────────────────────────────────────────────
+    // Each row is {txn, group, status, diff}. Matched/scan_error pairs have
+    // both sides filled; missing has only txn; app_only has only group.
+    const alignedRows = [];
+    for (const r of results) alignedRows.push(r);
+    for (const g of appOnlyGroups) alignedRows.push({ txn: null, group: g, status: "app_only", diff: null });
+    alignedRows.sort((a, b) => {
+      const dA = parseDate(a.txn?.date || a.group?.date) || 0;
+      const dB = parseDate(b.txn?.date || b.group?.date) || 0;
+      if (dA !== dB) return dA - dB;
+      const tA = a.txn?.time || "";
+      const tB = b.txn?.time || "";
+      if (tA !== tB) return tA.localeCompare(tB);
+      return (a.txn?.rego || a.group?.registration || "").localeCompare(b.txn?.rego || b.group?.registration || "");
+    });
+    // Apply filter + search to the aligned list (same predicates, but now
+    // also considering app-only side matches)
+    const displayRows = alignedRows.filter(r => {
+      if (reconFilter !== "all" && r.status !== reconFilter) return false;
+      if (!searchTerm) return true;
+      return (
+        (r.txn?.rego || "").includes(searchTerm) ||
+        (r.txn?.cardNumber || "").includes(searchTerm) ||
+        (r.txn?.driver || "").toUpperCase().includes(searchTerm) ||
+        (r.txn?.station || "").toUpperCase().includes(searchTerm) ||
+        (r.group?.registration || "").toUpperCase().includes(searchTerm) ||
+        (r.group?.driverName || "").toUpperCase().includes(searchTerm) ||
+        normalizeCardNum(r.group?.fleetCardNumber).includes(searchTerm)
+      );
+    });
+
+    // Uniform row height so the two tables visually align side-by-side. Split
+    // groups expand to accommodate the extra rows without breaking alignment
+    // (we use a matching blank-row block on the opposite side — see below).
+    const BASE_ROW_H = 44;
+    const cellStyle = {
+      padding: "2px 4px",
+      fontSize: 11,
+      color: "#0f172a",
+      verticalAlign: "middle",
+      borderBottom: "1px solid #eef2f6",
+      whiteSpace: "nowrap",
+    };
+    const inputStyle = {
+      width: "100%",
+      padding: "4px 6px",
+      fontSize: 11,
+      border: "1px solid transparent",
+      background: "transparent",
+      borderRadius: 4,
+      fontFamily: "inherit",
+      color: "#0f172a",
+      outline: "none",
+    };
+    const focusCellStyle = (e) => { e.target.style.background = "white"; e.target.style.borderColor = "#93c5fd"; };
+    const blurCellStyle = (e) => { e.target.style.background = "transparent"; e.target.style.borderColor = "transparent"; };
+
+    // Editable cell component — uncontrolled (defaultValue) so we don't
+    // re-render on every keystroke. Commits on blur + Enter.
+    const EditCell = ({ value, onCommit, align = "left", width, readOnly = false, placeholder = "", type = "text" }) => (
+      <td style={{ ...cellStyle, textAlign: align, width }}>
+        {readOnly ? (
+          <span style={{ padding: "4px 6px", display: "inline-block" }}>{value ?? ""}</span>
+        ) : (
+          <input
+            key={value ?? ""}
+            type={type}
+            defaultValue={value ?? ""}
+            placeholder={placeholder}
+            onFocus={focusCellStyle}
+            onBlur={(e) => { blurCellStyle(e); if (e.target.value !== String(value ?? "")) onCommit(e.target.value); }}
+            onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { e.target.value = value ?? ""; e.target.blur(); } }}
+            style={{ ...inputStyle, textAlign: align }}
+          />
+        )}
+      </td>
+    );
 
     // Quick-set range buttons
     const setRangeTo = (daysAgo) => {
@@ -11775,28 +11810,170 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               />
             </div>
 
-            {/* Transaction list */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {searched.length === 0 && searchedAppOnly.length === 0 && (
-                <div style={{ textAlign: "center", padding: 20, color: "#94a3b8", fontSize: 13 }}>
-                  {fleetCardTxns.length === 0
-                    ? "Upload a fleet card report to begin"
-                    : fuelTxns.length === 0
-                    ? "No transactions in the selected date range"
-                    : "No transactions match the current filter"}
-                </div>
-              )}
-              {searched.map(r => renderTxnCard(r.txn, r.group, r.status, r.diff))}
-              {/* App-only section */}
-              {searchedAppOnly.length > 0 && (reconFilter === "all" || reconFilter === "app_only") && (
-                <>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#1d4ed8", letterSpacing: "0.04em", textTransform: "uppercase", marginTop: 8, marginBottom: 4 }}>
-                    In app but not in report ({searchedAppOnly.length})
+            {/* ── Dual spreadsheet layout ──────────────────────────────── */}
+            {displayRows.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 30, color: "#94a3b8", fontSize: 13, background: "white", border: "1px solid #e2e8f0", borderRadius: 10 }}>
+                {fleetCardTxns.length === 0
+                  ? "Upload a fleet card report to begin"
+                  : fuelTxns.length === 0 && receiptGroups.length === 0
+                  ? "No transactions or app entries in the selected date range"
+                  : "Nothing matches the current filter"}
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {/* ── LEFT: FleetCard Report ─────────────────────────── */}
+                <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
+                  <div style={{ padding: "8px 12px", fontSize: 11, fontWeight: 700, color: "#374151", letterSpacing: "0.04em", textTransform: "uppercase", borderBottom: "1px solid #e2e8f0", background: "#fafafa", display: "flex", justifyContent: "space-between" }}>
+                    <span>{"\uD83D\uDCCB"} FleetCard Report</span>
+                    <span style={{ fontWeight: 500, color: "#94a3b8" }}>{fuelTxns.length} fuel txn{fuelTxns.length !== 1 ? "s" : ""}</span>
                   </div>
-                  {searchedAppOnly.map(g => renderTxnCard(null, g, "app_only", null))}
-                </>
-              )}
-            </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 22 }}></th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 84 }}>Date</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 66 }}>Rego</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Station</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 84 }}>Product</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 60, textAlign: "right" }}>L</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 56, textAlign: "right" }}>$/L</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 72, textAlign: "right" }}>Total</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 24 }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {displayRows.map((r, i) => {
+                          const st = statusStyle[r.status] || statusStyle.matched;
+                          const rowBg = i % 2 === 0 ? st.bg : st.bgAlt;
+                          if (!r.txn) {
+                            // App-only: render a placeholder row so the right table can still render the group on the same row index.
+                            return (
+                              <tr key={`L-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
+                                <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>{st.label}</td>
+                                <td colSpan={8} style={{ ...cellStyle, color: "#94a3b8", fontStyle: "italic" }}>— no transaction in report —</td>
+                              </tr>
+                            );
+                          }
+                          const t = r.txn;
+                          return (
+                            <tr key={`L-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
+                              <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>{st.label}</td>
+                              <EditCell value={t.date} onCommit={v => saveTxnEdit(t.id, "date", v)} />
+                              <EditCell value={t.rego} onCommit={v => saveTxnEdit(t.id, "rego", v)} />
+                              <EditCell value={t.station} onCommit={v => saveTxnEdit(t.id, "station", v)} />
+                              <EditCell value={t.product} onCommit={v => saveTxnEdit(t.id, "product", v)} />
+                              <EditCell value={t.litres} onCommit={v => saveTxnEdit(t.id, "litres", v)} align="right" />
+                              <EditCell value={t.ppl} onCommit={v => saveTxnEdit(t.id, "ppl", v)} align="right" />
+                              <EditCell value={t.cost != null ? t.cost.toFixed(2) : ""} onCommit={v => saveTxnEdit(t.id, "cost", v)} align="right" />
+                              <td style={{ ...cellStyle, textAlign: "center" }}>
+                                <button onClick={() => setConfirmAction({
+                                  message: `Remove this fleet card transaction row?\n\n${t.rego || "?"} · ${t.station || "?"} · $${t.cost != null ? t.cost.toFixed(2) : "?"}`,
+                                  onConfirm: () => { deleteTxn(t.id); setConfirmAction(null); },
+                                })} title="Remove this row" style={{
+                                  background: "none", border: "none", color: "#cbd5e1", cursor: "pointer",
+                                  fontSize: 14, lineHeight: 1, padding: "2px 4px",
+                                }}>{"\u00D7"}</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* ── RIGHT: App Entries (receipts) ──────────────────────── */}
+                <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
+                  <div style={{ padding: "8px 12px", fontSize: 11, fontWeight: 700, color: "#374151", letterSpacing: "0.04em", textTransform: "uppercase", borderBottom: "1px solid #e2e8f0", background: "#fafafa", display: "flex", justifyContent: "space-between" }}>
+                    <span>{"\uD83D\uDCF1"} App Entries</span>
+                    <span style={{ fontWeight: 500, color: "#94a3b8" }}>{receiptGroups.length} receipt{receiptGroups.length !== 1 ? "s" : ""}</span>
+                  </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 22 }}></th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 66 }}>Rego</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Driver</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Station</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 64 }}>Fuel</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 60, textAlign: "right" }}>L</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 56, textAlign: "right" }}>$/L</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 72, textAlign: "right" }}>Total</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 56, textAlign: "center" }}>View</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {displayRows.map((r, i) => {
+                          const st = statusStyle[r.status] || statusStyle.matched;
+                          const rowBg = i % 2 === 0 ? st.bg : st.bgAlt;
+                          if (!r.group) {
+                            return (
+                              <tr key={`R-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
+                                <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>{st.label}</td>
+                                <td colSpan={8} style={{ ...cellStyle, color: "#94a3b8", fontStyle: "italic" }}>
+                                  — no receipt lodged{r.txn?.driver ? ` · follow up with ${r.txn.driver}` : ""} —
+                                </td>
+                              </tr>
+                            );
+                          }
+                          const g = r.group;
+                          const isMerged = g.entries.length > 1;
+                          const only = g.entries[0];
+                          // For merged groups: totals are read-only; cells reflect the SUM. Per-split edits via the 📝 Edit button.
+                          return (
+                            <tr key={`R-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
+                              <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>
+                                {st.label}
+                                {isMerged && <div style={{ fontSize: 8, color: st.text, fontWeight: 600, marginTop: 1 }}>{g.entries.length}×</div>}
+                              </td>
+                              {isMerged ? (
+                                <>
+                                  <EditCell value={g.registration} readOnly />
+                                  <EditCell value={g.driverName} readOnly />
+                                  <EditCell value={g.station} readOnly />
+                                  <td style={{ ...cellStyle, color: "#64748b", fontStyle: "italic" }}>mixed</td>
+                                  <td style={{ ...cellStyle, textAlign: "right", fontWeight: 500 }}>{g.totalLitres ? g.totalLitres.toFixed(2) : ""}</td>
+                                  <td style={{ ...cellStyle, textAlign: "right", color: "#94a3b8" }}>{"\u2014"}</td>
+                                  <td style={{ ...cellStyle, textAlign: "right", fontWeight: 700 }}>
+                                    {"$" + g.totalCost.toFixed(2)}
+                                    {r.status === "scan_error" && r.diff != null && (
+                                      <div style={{ fontSize: 9, color: "#b45309" }}>Δ ${r.diff.toFixed(2)}</div>
+                                    )}
+                                  </td>
+                                </>
+                              ) : only ? (
+                                <>
+                                  <EditCell value={only.registration} onCommit={v => saveEntryEdit(only.id, "registration", v)} />
+                                  <EditCell value={only.driverName} onCommit={v => saveEntryEdit(only.id, "driverName", v)} />
+                                  <EditCell value={only.station} onCommit={v => saveEntryEdit(only.id, "station", v)} />
+                                  <EditCell value={only.fuelType} onCommit={v => saveEntryEdit(only.id, "fuelType", v)} />
+                                  <EditCell value={only.litres} onCommit={v => saveEntryEdit(only.id, "litres", v)} align="right" />
+                                  <EditCell value={only.pricePerLitre} onCommit={v => saveEntryEdit(only.id, "pricePerLitre", v)} align="right" />
+                                  <EditCell value={only.totalCost != null ? only.totalCost.toFixed(2) : ""} onCommit={v => saveEntryEdit(only.id, "totalCost", v)} align="right" />
+                                </>
+                              ) : null}
+                              {/* Actions: view receipt, edit full entry */}
+                              <td style={{ ...cellStyle, textAlign: "center", whiteSpace: "nowrap" }}>
+                                {only?.hasReceipt && (
+                                  <button onClick={() => setViewingReceipt(only.id)} title="View receipt image" style={{
+                                    background: "none", border: "none", color: "#16a34a", cursor: "pointer", fontSize: 13, padding: "2px 3px",
+                                  }}>{"\uD83D\uDCC4"}</button>
+                                )}
+                                <button onClick={() => setEditingEntry(isMerged ? g.entries[0] : only)} title={isMerged ? "Edit the first split (use Data tab for the rest)" : "Edit full entry"} style={{
+                                  background: "none", border: "none", color: "#7c3aed", cursor: "pointer", fontSize: 11, padding: "2px 3px", marginLeft: 2,
+                                }}>{"\u270E"}</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Clear button */}
             <div style={{ marginTop: 16, textAlign: "center" }}>
