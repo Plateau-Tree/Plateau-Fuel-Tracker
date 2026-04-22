@@ -778,16 +778,16 @@ NON-FUEL PURCHASES:
 Oil, AdBlue, coolant, car wash, food, etc. List these separately in "otherItems" with litres, cost, and pricePerLitre where applicable.
 
 FLEET CARD DATA — PHYSICAL CARD ONLY:
-Look for a PHYSICAL orange/red Shell FleetCard VISIBLE AS A SEPARATE CARD in the photo (not just text on the receipt). The card must show the full 16-digit number starting with 7034.
-
-If you can only see "FLEETCARD" printed on the receipt paper but no actual physical card with 16 digits, set cardNumber to null.
+Look for a PHYSICAL orange/red Shell FleetCard VISIBLE AS A SEPARATE CARD in the photo (not just text on the receipt). If you can only see "FLEETCARD" printed on the receipt paper with no physical plastic card visible, set both cardNumber and vehicleOnCard to null.
 
 The physical card layout:
   Line 1: "FleetCard" logo
-  Line 2: 16-digit card number starting with 7034
-  Line 3: Cardholder surname + vehicle model (e.g. "WHITE NNR-451") — NOT the registration
-  Line 4: VEHICLE REGISTRATION — the actual rego (e.g. "DF25LB") — short 5-7 char code
+  Line 2: 16-digit card number, embossed — always starts with "70343051"
+  Line 3: Vehicle type/model (e.g. "NNR-451", "HILUX") — NOT the registration
+  Line 4: VEHICLE REGISTRATION — short 5-7 char alphanumeric code (e.g. "DF25LB", "EIA53F")
   Line 5: Expiry date (e.g. "EXP 11/30")
+
+READING PRIORITY: read the REGISTRATION carefully — it's the primary key the app uses to look up the card. The 16-digit embossed card number is hard to read under shadow/glare; the app has a database that maps every rego to its correct card number automatically, so if ANY digit of the card number is uncertain, set cardNumber to null rather than guessing. A null card with a correct rego is MUCH better than a wrong card. The card number always starts with "70343051" — if your reading disagrees with that prefix, re-check.
 
 Also look for handwritten notes, and the vehicle odometer if visible.
 
@@ -849,38 +849,47 @@ RULES
 //     which is independent of whether the matcher could later map the scan
 //     to a known card in the database.
 // ─────────────────────────────────────────────────────────────────────────────
-const buildCardScanPrompt = () => `Extract fleet card details from this image. This should show a Shell FleetCard — an orange/red plastic card with an embossed (raised) 16-digit number.
+const buildCardScanPrompt = () => `Extract fleet card details from this image. This should show a Shell FleetCard — an orange/red plastic card with embossed (raised) digits and text.
 
 CARD LAYOUT (top to bottom):
 Line 1: "FleetCard" logo
-Line 2: 16-digit card number, EMBOSSED (raised ridges) — always starts with "7034"
-Line 3: Cardholder surname + vehicle model description (e.g. "WHITE NNR-451", "SMITH HILUX") — this is NOT the registration
-Line 4: VEHICLE REGISTRATION — short 5-7 character alphanumeric code (e.g. "DF25LB", "EIA53F", "BC12AB")
+Line 2: 16-digit card number, EMBOSSED — always starts with "70343051" (the fixed Plateau Trees prefix)
+Line 3: Vehicle type/model description (e.g. "NNR-451", "HILUX", "RANGER") — this is NOT the registration
+Line 4: VEHICLE REGISTRATION — short 5-7 character alphanumeric code (e.g. "DF25LB", "EIA53F", "BC12AB"). This is the key field to read accurately.
 Line 5: Expiry date (e.g. "EXP 11/30")
 
+═══════════════════════════════════════════════════
+READING PRIORITY: REGISTRATION FIRST, CARD NUMBER SECOND
+═══════════════════════════════════════════════════
+
+The app matches fleet cards to vehicles by REGISTRATION, not by card number. The registration is short (5-7 chars), printed high-contrast, and easy to read. The 16-digit embossed card number is hard to read under glare/shadow and the app has a database that maps every rego to its card number automatically.
+
+Your job:
+1. Read the REGISTRATION carefully and accurately. Compare against the expected format (e.g. DF25LB is 2 letters + 2 digits + 2 letters). If any character is ambiguous (O vs 0, I vs 1, 8 vs B), flag it in confidence.issues. This field is the primary lookup key — getting it right is what matters most.
+2. Read the 16-digit card number ONLY if clearly legible. If any digit is uncertain, return null for cardNumber rather than guessing — the app will fill it in from the database using the rego. A null cardNumber is MUCH better than a wrong one.
+
 CRITICAL RULES:
-- The 16-digit card number is EMBOSSED. Embossed digits create raised ridges that cast shadows under flash photography. Common misreads from shadows: 8↔6, 8↔3, 1↔7, 0↔8, 5↔6, 5↔3, 9↔0. Look CAREFULLY at each digit — the ridge shape, not the shadow, is the true digit.
-- The card number ALWAYS starts with "7034". If you read a first four digits that aren't "7034", you have misread the opening digits — re-read.
-- The registration is on the line BELOW the surname. Do NOT return the surname line as the rego.
-- If there is also a receipt visible in the photo and it says "FLEETCARD" in text, that is just a transaction label — it is NOT the card number. The card number must come from the PHYSICAL plastic card with 16 embossed digits.
-- If you cannot clearly see all 16 embossed digits, return null for cardNumber rather than guessing.
-- If the angle/glare/blur makes ANY digit ambiguous, set confidence.overall to "medium" or "low" and list the specific ambiguity in confidence.issues.
+- The embossed 16-digit card number always starts with "70343051". If you can see the first 8 digits and they're NOT "70343051", you're misreading — re-examine the image.
+- Embossed digits cast shadows under flash. Common misreads: 8↔6, 8↔3, 1↔7, 0↔8, 5↔6, 5↔3, 9↔0. If ANY digit is uncertain, leave cardNumber null.
+- The registration is on the line BELOW the vehicle-type line. Don't confuse a model code like "NNR-451" with the rego.
+- If you can only see "FLEETCARD" printed on a receipt (not a physical plastic card), there is no card to scan — return null for both fields.
+- Your confidence in the REGO is what matters most. If you could read it clearly, overall confidence can be "high" even if the card number was hard to read.
 
 Return ONLY valid JSON (no other text):
 {
-  "cardNumber": "16 digit card number or null",
-  "vehicleOnCard": "registration from the line below the surname, or null",
-  "rawCardRead": "the exact digits you read before any guessing — same as cardNumber if confident, or what you best-effort deciphered",
+  "cardNumber": "16-digit card number if clearly legible, else null",
+  "vehicleOnCard": "the registration from the rego line (primary field — read this accurately)",
+  "rawCardRead": "what you actually saw for the card number, even if uncertain — pass through unchanged",
   "confidence": {
     "overall": "high | medium | low",
-    "issues": ["list any specific digits or characters that were unclear, e.g. '3rd digit could be 8 or 6', 'rego partially obscured'"]
+    "issues": ["list any uncertain characters, especially on the rego — e.g. '4th rego char could be 5 or S', 'card digits too blurry to read'"]
   }
 }
 
-CONFIDENCE GUIDE:
-- "high" — card is in focus, no glare, every digit unambiguous.
-- "medium" — one or two digits required careful inspection or the image has minor blur/glare but you are reasonably sure.
-- "low" — image is blurry, heavily shadowed, partially obscured, or you had to guess at multiple digits.`;
+CONFIDENCE GUIDE (based on REGO clarity primarily):
+- "high" — rego is unambiguous; card number either clearly readable or cleanly null.
+- "medium" — one rego character required careful inspection OR confident rego with uncertain card digits.
+- "low" — rego itself is ambiguous, or the card is too blurry/obscured/angled to read any field reliably.`;
 
 // Normalize station name using learned corrections
 function normalizeStationName(rawStation, learnedCorrections) {
@@ -1832,18 +1841,24 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMap
     }
   }
 
-  // ── STRATEGY 1: Match by REGO (most reliable — short text, easier for AI to read) ──
-  let confusableRegos = []; // regos within edit distance 1 of each other (e.g. DF25LB/DF26LB)
+  // ── STRATEGY 1: Match by REGO (PRIMARY path — rego-first) ──
+  // The registration is short, high-contrast, and printed (not embossed),
+  // so the AI reads it much more reliably than the 16 embossed card digits.
+  // The prompt is explicitly biased to prefer null cardNumber over a guess.
+  // Policy: when a rego is found in the DB (exact or edit-dist 1), the DB's
+  // canonical card number is authoritative — we don't second-guess it using
+  // whatever the AI tried to read off the embossed card, UNLESS there's a
+  // genuine tie-break case (confusable regos + an exact card match on one
+  // of them, handled in Strategy 2 below).
+  let confusableRegos = [];
+  let regoMatchedInDB = false; // set when Strategy 1 finds an authoritative rego hit
   if (cleanScannedRego && cleanScannedRego.length >= 3) {
-    // Find ALL regos within edit distance 1 of the scanned rego
     const closeMatches = [];
     for (const known of allRegos) {
       const dist = editDistance(cleanScannedRego, known.rego);
       if (dist <= 1) closeMatches.push({ ...known, dist });
     }
-    // Sort by distance (exact first), then alphabetically
     closeMatches.sort((a, b) => a.dist - b.dist || a.rego.localeCompare(b.rego));
-    // Deduplicate by rego
     const seen = new Set();
     const unique = closeMatches.filter(m => { if (seen.has(m.rego)) return false; seen.add(m.rego); return true; });
 
@@ -1853,11 +1868,13 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMap
       if (cardMatch) {
         bestMatch = cardMatch;
         bestScore = bestRegoEntry.dist;
+        regoMatchedInDB = true;
       } else {
+        // Rego found but no card stored in DB — keep the rego, let Strategy 2
+        // try to supply the card number.
         bestMatch = { card: "", rego: bestRegoEntry.rego, unique8: "", source: bestRegoEntry.source };
         bestScore = bestRegoEntry.dist;
       }
-      // If multiple regos are within distance 1, flag as confusable
       if (unique.length > 1) {
         confusableRegos = unique.map(m => m.rego);
       }
@@ -1910,23 +1927,36 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMap
 
     if (bestCardMatch) {
       if (!bestMatch) {
-        // No rego match — use card match
+        // No rego match at all — only card data available, use it.
         bestMatch = bestCardMatch;
         bestScore = bestCardDist;
       } else if (bestCardMatch.rego === bestMatch.rego) {
-        // Card confirms rego. If Strategy 1 picked a rego-only entry that had
-        // no card data (e.g. a REGO_DB row without `c`), upgrade to the
-        // bestCardMatch row — it has the authoritative card number we need.
+        // Card confirms the rego lookup. If Strategy 1 picked a rego-only
+        // row with no card data (REGO_DB entry missing `c`), upgrade to
+        // the card-bearing row so we return a usable card number.
         if (!bestMatch.card && bestCardMatch.card) {
           bestMatch = bestCardMatch;
         }
         bestScore = 0;
-      } else if (bestCardDist === 0 && bestScore > 0) {
-        // Card is exact but rego pointed elsewhere — trust exact card
+      } else if (!regoMatchedInDB && bestCardDist === 0 && bestScore > 0) {
+        // No authoritative rego hit (Strategy 1 picked a rego-only fallback
+        // or nothing), but card exact-matches a different rego — switch to
+        // the card match. This fires only when rego-first had nothing to
+        // stand on; we never let an embossed-digit read override a rego
+        // that was successfully looked up in the DB.
+        bestMatch = bestCardMatch;
+        bestScore = 0;
+      } else if (regoMatchedInDB && confusableRegos.length > 1 &&
+                 bestCardDist === 0 && confusableRegos.includes(bestCardMatch.rego)) {
+        // Disambiguation case: rego had near-identical alternatives (e.g.
+        // DF25LB / DF26LB) AND the card read is exact on one of those
+        // alternatives — use the card as the tie-break. This is the ONLY
+        // time the AI's card read is allowed to override an authoritative
+        // rego hit.
         bestMatch = bestCardMatch;
         bestScore = 0;
       }
-      // Otherwise keep the rego match — rego is more reliable
+      // Otherwise keep the rego match — rego is the primary key.
     }
   }
 
@@ -1993,6 +2023,13 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMap
     }
   }
 
+  // Flag when the returned card came from the DB via a rego lookup rather
+  // than being read off the embossed digits — useful for audit + UI hints
+  // ("card number was pulled from your vehicle database, not from the card
+  // image"). Set when rego matched authoritatively AND the DB supplied a
+  // card, regardless of whether the AI's card read was usable.
+  const cardFromRegoDBLookup = regoMatchedInDB && !!bestMatch?.card;
+
   return {
     cardNumber: bestMatch?.card || scannedCard || null,
     vehicleOnCard: bestMatch?.rego || scannedRego || null,
@@ -2001,6 +2038,7 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMap
     _confusableRegos: confusableRegos.length > 1 ? confusableRegos : null,
     _originalCard: bestScore > 0 ? scannedCard : null,
     _originalRego: bestScore > 0 ? scannedRego : null,
+    _cardFromRegoLookup: cardFromRegoDBLookup,
   };
 }
 
