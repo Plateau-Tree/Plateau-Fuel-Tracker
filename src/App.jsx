@@ -11766,33 +11766,56 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       );
     });
 
-    // Split into two sections: exact matches at the top, everything else
-    // (scan errors / missing receipts / app-only receipts) in "Needs Review"
-    // below. Admin can then focus on the clean pile first, then work through
-    // exceptions. Splits are kept together because each row already carries
-    // its parent group's status.
-    const exactRows  = filteredBase.filter(r => r.status === "matched");
-    const reviewRows = filteredBase.filter(r => r.status !== "matched");
+    // Break into four sections so the admin works one problem type at a
+    // time. Exact matches up top (the clean pile), then three "Needs
+    // Review" buckets — each surfaces a distinct failure mode:
+    //   · Scan Errors  — receipt + txn both exist but totals disagree
+    //                    (usually an OCR slip the admin can correct)
+    //   · Mismatch     — txn has no matching receipt in the app
+    //                    (driver forgot to log a receipt)
+    //   · App Only     — receipt exists but no txn in the fleet report
+    //                    (unusual — possibly a different card or surcharge)
+    const exactRows     = filteredBase.filter(r => r.status === "matched");
+    const scanErrorRows = filteredBase.filter(r => r.status === "scan_error");
+    const missingRows   = filteredBase.filter(r => r.status === "missing");
+    const appOnlyRows   = filteredBase.filter(r => r.status === "app_only");
 
-    // Section headers only appear in the "All" view. When the user has
-    // filtered to a single status (Matched / Scan Error / Missing / App Only),
-    // the filter button itself is the header — another banner would be noise.
-    const showSections = reconFilter === "all" && exactRows.length > 0 && reviewRows.length > 0;
+    // Section headers only appear in the "All" view, and only when there
+    // are at least two non-empty buckets — a single banner above a single
+    // category adds noise. Per-filter views rely on the filter button
+    // itself as the header.
+    const populatedBuckets = [exactRows, scanErrorRows, missingRows, appOnlyRows].filter(a => a.length > 0);
+    const showSections = reconFilter === "all" && populatedBuckets.length >= 2;
 
-    const displayRows = showSections
-      ? [
-          { __section: "exact",  label: `Exact Matches · ${exactRows.length}` },
-          ...exactRows,
-          { __section: "review", label: `Needs Review · ${reviewRows.length}` },
-          ...reviewRows,
-        ]
-      : filteredBase;
+    const displayRows = [];
+    if (showSections) {
+      if (exactRows.length > 0) {
+        displayRows.push({ __section: "exact", label: `Exact Matches \u00B7 ${exactRows.length}` });
+        displayRows.push(...exactRows);
+      }
+      if (scanErrorRows.length > 0) {
+        displayRows.push({ __section: "scan_error", label: `Scan Errors \u00B7 ${scanErrorRows.length}` });
+        displayRows.push(...scanErrorRows);
+      }
+      if (missingRows.length > 0) {
+        displayRows.push({ __section: "missing", label: `Mismatch \u00B7 ${missingRows.length}` });
+        displayRows.push(...missingRows);
+      }
+      if (appOnlyRows.length > 0) {
+        displayRows.push({ __section: "app_only", label: `App Only \u00B7 ${appOnlyRows.length}` });
+        displayRows.push(...appOnlyRows);
+      }
+    } else {
+      displayRows.push(...filteredBase);
+    }
 
-    // Styling for the section divider rows — mirrors the on-screen status
-    // colours so the two sections feel connected to the Matched / warning KPIs.
+    // Styling for the section divider rows — mirrors each category's KPI
+    // pill colour so the banner feels visually linked to the filter chip.
     const sectionRowStyle = {
-      exact:  { bg: "#dcfce7", border: "#4ade80", text: "#14532d" },
-      review: { bg: "#fef3c7", border: "#f59e0b", text: "#78350f" },
+      exact:      { bg: "#dcfce7", border: "#4ade80", text: "#14532d", icon: "\u2713" },
+      scan_error: { bg: "#fef3c7", border: "#f59e0b", text: "#78350f", icon: "\u26A0" },
+      missing:    { bg: "#fee2e2", border: "#f87171", text: "#7f1d1d", icon: "\u2717" },
+      app_only:   { bg: "#dbeafe", border: "#60a5fa", text: "#1e3a8a", icon: "\u24D8" },
     };
 
     // Uniform row height so the two tables visually align side-by-side.
@@ -11932,7 +11955,12 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           if (r.__section) {
             // Echo the banner text on BOTH sides so each panel is self-labelled
             // when an admin hides a column pane in Excel.
-            const bannerIcon = r.__section === "exact" ? "\u2713" : "\u26A0";
+            const bannerIcon =
+              r.__section === "exact"      ? "\u2713" :
+              r.__section === "scan_error" ? "\u26A0" :
+              r.__section === "missing"    ? "\u2717" :
+              r.__section === "app_only"   ? "\u24D8" :
+                                             "\u2022";
             const bannerText = `${bannerIcon}  ${r.label}`;
             const rowArr = new Array(25).fill("");
             rowArr[0] = bannerText;
@@ -12073,11 +12101,13 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         }
 
         // ── Data + section banner rows — colour each by role ──
-        // Section banner styling — uses the same palette as the on-screen
-        // dividers (pale green for exact, pale amber for review).
+        // Section banner styling — mirrors the on-screen category colours
+        // so the Excel output is visually consistent with the app view.
         const SECTION_STYLE = {
-          exact:  { fill: "FFDCFCE7", text: "FF14532D" },
-          review: { fill: "FFFEF3C7", text: "FF78350F" },
+          exact:      { fill: "FFDCFCE7", text: "FF14532D" }, // green
+          scan_error: { fill: "FFFEF3C7", text: "FF78350F" }, // amber
+          missing:    { fill: "FFFEE2E2", text: "FF7F1D1D" }, // red
+          app_only:   { fill: "FFDBEAFE", text: "FF1E3A8A" }, // blue
         };
         for (const m of rowMeta) {
           if (m.kind === "section") {
@@ -12356,7 +12386,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                             return (
                               <tr key={`L-sec-${r.__section}`} style={{ background: sec.bg, borderTop: `2px solid ${sec.border}`, borderBottom: `2px solid ${sec.border}` }}>
                                 <td colSpan={10} style={{ ...cellStyle, padding: "10px 12px", fontSize: 11, fontWeight: 700, color: sec.text, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
-                                  {r.__section === "exact" ? "\u2713" : "\u26A0"} {r.label}
+                                  {sec.icon} {r.label}
                                 </td>
                               </tr>
                             );
@@ -12444,7 +12474,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                             return (
                               <tr key={`R-sec-${r.__section}`} style={{ background: sec.bg, borderTop: `2px solid ${sec.border}`, borderBottom: `2px solid ${sec.border}` }}>
                                 <td colSpan={11} style={{ ...cellStyle, padding: "10px 12px", fontSize: 11, fontWeight: 700, color: sec.text, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
-                                  {r.__section === "exact" ? "\u2713" : "\u26A0"} {r.label}
+                                  {sec.icon} {r.label}
                                 </td>
                               </tr>
                             );
