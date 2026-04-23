@@ -11693,30 +11693,25 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     };
 
     // ── Build aligned rows ──────────────────────────────────────────────
-    // Each matched/scan_error pair contributes one row per split entry (so
-    // every split is individually editable). The FleetCard txn only renders
-    // on the FIRST row of the group (splitIdx === 0); continuation rows
-    // show a slim "↳ same txn (N of M)" placeholder so both tables stay
-    // index-aligned side-by-side.
+    // One row per receipt group — even when the receipt was split across
+    // multiple vehicles / AdBlue / etc. The underlying entries stay intact
+    // on the Data tab (so per-vehicle dashboards are unaffected); we just
+    // collapse them here so the reconciliation compares whole-receipt
+    // totals against whole-transaction totals. Matching already uses
+    // `g.totalCost` (sum of splits) so no logic change is needed above.
     const alignedRows = [];
     const pushResultRows = (r) => {
-      const groupSplits = (r.group?.entries && r.group.entries.length > 1) ? r.group.entries : null;
-      if (groupSplits) {
-        groupSplits.forEach((entry, idx) => {
-          alignedRows.push({
-            txn: r.txn, group: r.group, entry,
-            splitIdx: idx, splitTotal: groupSplits.length,
-            status: r.status, diff: r.diff,
-          });
-        });
-      } else {
-        alignedRows.push({
-          txn: r.txn, group: r.group,
-          entry: r.group?.entries?.[0] || null,
-          splitIdx: 0, splitTotal: r.group?.entries?.length || 1,
-          status: r.status, diff: r.diff,
-        });
-      }
+      const entries = r.group?.entries || [];
+      alignedRows.push({
+        txn: r.txn,
+        group: r.group,
+        entry: entries[0] || null, // primary — used only when splitTotal === 1
+        entries,                   // full split list for aggregate display
+        splitIdx: 0,
+        splitTotal: entries.length || 1,
+        status: r.status,
+        diff: r.diff,
+      });
     };
     for (const r of results) pushResultRows(r);
     for (const g of appOnlyGroups) pushResultRows({ txn: null, group: g, status: "app_only", diff: null });
@@ -11744,26 +11739,30 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       }
       if (A.d !== B.d) return A.d - B.d;
       if (A.t !== B.t) return A.t.localeCompare(B.t);
-      if (A.groupId !== B.groupId) return A.groupId.localeCompare(B.groupId);
-      return (a.splitIdx || 0) - (b.splitIdx || 0);
+      return A.groupId.localeCompare(B.groupId);
     });
 
-    // Apply filter + search first. Splits inherit their group's status so
-    // filtering by e.g. "scan_error" keeps every split of that group visible.
+    // Apply filter + search first. Row == whole receipt, so search needs
+    // to look across every split — a receipt that has vehicle A in split 1
+    // and AdBlue in split 2 should match "A" or "ADBLUE".
     const filteredBase = alignedRows.filter(r => {
       if (reconFilter !== "all" && r.status !== reconFilter) return false;
       if (!searchTerm) return true;
+      const entryHit = (r.entries || []).some(e =>
+        (e.cardRego || "").toUpperCase().includes(searchTerm) ||
+        (e.registration || "").toUpperCase().includes(searchTerm) ||
+        (e.driverName || "").toUpperCase().includes(searchTerm) ||
+        (e.station || "").toUpperCase().includes(searchTerm) ||
+        (e.fuelType || "").toUpperCase().includes(searchTerm) ||
+        normalizeCardNum(e.fleetCardNumber).includes(searchTerm)
+      );
       return (
+        entryHit ||
         (r.txn?.rego || "").includes(searchTerm) ||
         (r.txn?.cardNumber || "").includes(searchTerm) ||
         (r.txn?.driver || "").toUpperCase().includes(searchTerm) ||
         (r.txn?.station || "").toUpperCase().includes(searchTerm) ||
-        (r.group?.fleetCardRego || "").toUpperCase().includes(searchTerm) ||
-        (r.entry?.cardRego || "").toUpperCase().includes(searchTerm) ||
-        (r.entry?.registration || "").toUpperCase().includes(searchTerm) ||
-        (r.entry?.driverName || "").toUpperCase().includes(searchTerm) ||
-        (r.entry?.station || "").toUpperCase().includes(searchTerm) ||
-        normalizeCardNum(r.entry?.fleetCardNumber).includes(searchTerm)
+        (r.group?.fleetCardRego || "").toUpperCase().includes(searchTerm)
       );
     });
 
@@ -11947,7 +11946,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           const statusLabel = st?.title || r.status;
 
           let fleetCardCols;
-          if (r.txn && r.splitIdx === 0) {
+          if (r.txn) {
             fleetCardCols = [
               statusLabel,
               r.txn.date || "",
@@ -11961,28 +11960,50 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               r.txn.ppl != null ? r.txn.ppl : "",
               r.txn.cost != null ? r.txn.cost : "",
             ];
-          } else if (r.txn && r.splitIdx > 0) {
-            fleetCardCols = ["", "", "", "", "", "", `↳ same transaction (split ${r.splitIdx + 1} of ${r.splitTotal})`, "", "", "", ""];
           } else {
             fleetCardCols = [statusLabel, "", "", "", "", "", "— no transaction in report —", "", "", "", ""];
           }
 
           let appCols;
-          if (r.entry) {
+          if (r.group && r.entries && r.entries.length > 0) {
+            // One row per receipt group. Multi-split receipts show whole-
+            // receipt totals with comma-joined vehicle regos / fuels so the
+            // reconciliation compares like-for-like against the fleet card
+            // transaction total. The individual splits remain intact on the
+            // Data tab for per-vehicle reporting.
+            const entries = r.entries;
+            const uniq = (arr) => Array.from(new Set(arr.map(s => (s || "").trim()).filter(Boolean)));
+            const g = r.group;
+            let litres, ppl, cost, regos, fuels;
+            if (entries.length > 1) {
+              litres = entries.reduce((s, x) => s + (x.litres || 0), 0);
+              cost   = entries.reduce((s, x) => s + (x.totalCost || 0), 0);
+              ppl    = litres > 0 ? cost / litres : 0;
+              regos  = uniq(entries.map(x => x.registration)).join(", ");
+              fuels  = uniq(entries.map(x => x.fuelType)).join(", ");
+            } else {
+              const e = entries[0];
+              litres = e.litres != null ? e.litres : "";
+              ppl    = e.pricePerLitre != null ? e.pricePerLitre : "";
+              cost   = e.totalCost != null ? e.totalCost : "";
+              regos  = e.registration || "";
+              fuels  = e.fuelType || "";
+            }
+            const anyReceipt = entries.some(x => x.hasReceipt);
             appCols = [
-              statusLabel + (r.splitTotal > 1 ? ` (${r.splitIdx + 1}/${r.splitTotal})` : ""),
-              r.entry.date || "",
-              r.entry.cardRego || lookupFleetCardRego(r.entry.fleetCardNumber) || "",
-              r.entry.registration || "",
-              r.entry.driverName || "",
-              r.entry.fleetCardNumber || "",
-              r.entry.station || "",
-              r.entry.fuelType || "",
-              r.entry.litres != null ? r.entry.litres : "",
-              r.entry.pricePerLitre != null ? r.entry.pricePerLitre : "",
-              r.entry.totalCost != null ? r.entry.totalCost : "",
-              r.entry.hasReceipt ? "Yes" : "",
-              r.splitTotal > 1 ? `${r.splitIdx + 1}/${r.splitTotal}` : "",
+              statusLabel,
+              g.date || "",
+              g.fleetCardRego || lookupFleetCardRego(g.fleetCardNumber) || "",
+              regos,
+              g.driverName || "",
+              g.fleetCardNumber || "",
+              g.station || "",
+              fuels,
+              litres,
+              typeof ppl === "number" ? Number(ppl.toFixed(3)) : ppl,
+              cost,
+              anyReceipt ? "Yes" : "",
+              entries.length > 1 ? `${entries.length} splits` : "",
             ];
           } else {
             const followUp = r.txn?.driver ? `follow up with ${r.txn.driver}` : "driver unknown";
@@ -12351,26 +12372,20 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                               </tr>
                             );
                           }
-                          // Continuation row for a split group (splitIdx > 0) — show
-                          // a slim "↳ same txn (N of M)" indicator so left and right
-                          // tables stay aligned. Only the first split renders the
-                          // actual txn data.
-                          if (r.splitIdx > 0) {
-                            return (
-                              <tr key={`L-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
-                                <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700, opacity: 0.5 }}>{st.label}</td>
-                                <td colSpan={9} style={{ ...cellStyle, color: "#94a3b8", fontStyle: "italic", padding: "0 8px" }}>
-                                  {"\u21B3"} same transaction (split {r.splitIdx + 1} of {r.splitTotal})
-                                </td>
-                              </tr>
-                            );
-                          }
+                          // Every row represents one whole receipt group — the fleet
+                          // card side always has a single txn per receipt, so splits
+                          // no longer produce continuation rows on the left.
                           const t = r.txn;
                           return (
                             <tr key={`L-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
                               <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>
                                 {st.label}
-                                {r.splitTotal > 1 && <div style={{ fontSize: 8, color: st.text, fontWeight: 600, marginTop: 1 }}>{r.splitTotal}×</div>}
+                                {r.splitTotal > 1 && (
+                                  <div
+                                    style={{ fontSize: 8, color: st.text, fontWeight: 600, marginTop: 1 }}
+                                    title={`Receipt was split into ${r.splitTotal} app entries — reconciliation shows the whole-receipt total`}
+                                  >{r.splitTotal}{"\u00D7"}</div>
+                                )}
                               </td>
                               <EditCell value={t.date} onCommit={v => saveTxnEdit(t.id, "date", v)} />
                               <EditCell value={t.time} onCommit={v => saveTxnEdit(t.id, "time", v)} />
@@ -12447,14 +12462,64 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                               </tr>
                             );
                           }
-                          // Individually editable split entry
+                          const isScanError = r.status === "scan_error";
+                          // ── Multi-split receipt: show one aggregated read-only row
+                          //    with summed litres + cost, and comma-joined fuel/vehicle
+                          //    values so the admin sees the whole receipt at a glance.
+                          //    The original per-vehicle splits stay editable on the
+                          //    Data tab — reconciliation just compares whole receipts. */
+                          if (r.splitTotal > 1) {
+                            const entries = r.entries || [];
+                            const uniq = (arr) => Array.from(new Set(arr.map(s => (s || "").trim()).filter(Boolean)));
+                            const aggRegos  = uniq(entries.map(x => x.registration)).join(", ");
+                            const aggFuels  = uniq(entries.map(x => x.fuelType)).join(", ");
+                            const aggLitres = entries.reduce((s, x) => s + (x.litres || 0), 0);
+                            const aggCost   = entries.reduce((s, x) => s + (x.totalCost || 0), 0);
+                            const aggPpl    = aggLitres > 0 ? aggCost / aggLitres : 0;
+                            const anyReceipt = entries.find(x => x.hasReceipt);
+                            const g = r.group || {};
+                            const splitTitle = `Receipt split across ${r.splitTotal} entries: ${entries.map(x => `${x.registration || "?"} $${(x.totalCost || 0).toFixed(2)}`).join(", ")}. Edit individual splits on the Data tab.`;
+                            const roStyle = { ...cellStyle, padding: "0 8px", color: "#475569" };
+                            return (
+                              <tr key={`R-${i}`} style={{ height: BASE_ROW_H, background: rowBg }} title={splitTitle}>
+                                <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>
+                                  {st.label}
+                                  <div style={{ fontSize: 8, color: st.text, fontWeight: 600, marginTop: 1 }}>{r.splitTotal}{"\u00D7"}</div>
+                                </td>
+                                <td style={roStyle}>{g.date || ""}</td>
+                                <td style={roStyle} title="Rego printed on the fleet card (used for matching)">
+                                  {g.fleetCardRego || lookupFleetCardRego(g.fleetCardNumber) || ""}
+                                </td>
+                                <td style={{ ...roStyle, color: "#64748b", fontSize: 11 }} title={`Split across: ${aggRegos}`}>
+                                  {aggRegos}
+                                </td>
+                                <td style={roStyle}>{g.driverName || ""}</td>
+                                <td style={roStyle}>{g.station || ""}</td>
+                                <td style={roStyle} title={`Fuel types across splits: ${aggFuels}`}>{aggFuels}</td>
+                                <td style={{ ...roStyle, textAlign: "right" }}>{aggLitres ? aggLitres.toFixed(2) : ""}</td>
+                                <td style={{ ...roStyle, textAlign: "right" }}>{aggPpl ? aggPpl.toFixed(3) : ""}</td>
+                                <td style={{ ...roStyle, textAlign: "right", position: "relative" }}>
+                                  <div style={{ fontWeight: 600, color: "#0f172a" }}>{aggCost ? aggCost.toFixed(2) : ""}</div>
+                                  {isScanError && r.diff != null && (
+                                    <div style={{ fontSize: 9, color: "#b45309", fontWeight: 700, marginTop: -2 }}>Δ ${r.diff.toFixed(2)}</div>
+                                  )}
+                                </td>
+                                <td style={{ ...cellStyle, textAlign: "center", whiteSpace: "nowrap" }}>
+                                  {anyReceipt && (
+                                    <button onClick={() => setViewingReceipt(anyReceipt.id)} title="View receipt image" style={{
+                                      background: "none", border: "none", color: "#16a34a", cursor: "pointer", fontSize: 14, padding: "2px 3px",
+                                    }}>{"\uD83D\uDCC4"}</button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          }
+                          // ── Single-entry receipt: keep the original editable row.
                           const e = r.entry;
-                          const isScanErrorLast = r.status === "scan_error" && r.splitIdx === r.splitTotal - 1;
                           return (
                             <tr key={`R-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
                               <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>
                                 {st.label}
-                                {r.splitTotal > 1 && <div style={{ fontSize: 8, color: st.text, fontWeight: 600, marginTop: 1 }}>{r.splitIdx + 1}/{r.splitTotal}</div>}
                               </td>
                               <EditCell value={e.date} onCommit={v => saveEntryEdit(e.id, "date", v)} />
                               <EditCell
@@ -12487,7 +12552,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                                   style={{ ...inputStyle, textAlign: "right" }}
                                   title="Click to edit"
                                 />
-                                {isScanErrorLast && r.diff != null && (
+                                {isScanError && r.diff != null && (
                                   <div style={{ fontSize: 9, color: "#b45309", fontWeight: 700, marginTop: -2, paddingRight: 6 }}>Δ ${r.diff.toFixed(2)}</div>
                                 )}
                               </td>
