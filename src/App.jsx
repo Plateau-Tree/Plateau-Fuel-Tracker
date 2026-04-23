@@ -11387,6 +11387,32 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
   // populated) still merge correctly. The grouping is view-only — nothing
   // in persisted state changes.
   const normalizeCardNum = (s) => (s || "").replace(/[\s\[\]]/g, "");
+
+  // Look up the canonical "fleetcard rego" for a card number by searching the
+  // static DRIVER_CARDS and REGO_DB. The `r` field in both DBs is the rego
+  // stored with the card by the fleet card provider — i.e. what will appear
+  // in the FleetCard Australia CSV export. This is NOT always the rego of
+  // the vehicle the driver is actually using (e.g. Carlos Carrillo's card is
+  // embossed WIA53F but he drives EIA53F). Returns "" if the card isn't known.
+  const lookupFleetCardRego = (cardNumber) => {
+    const clean = normalizeCardNum(cardNumber);
+    if (!clean || clean.length < 4) return "";
+    const dc = DRIVER_CARDS.find(c => normalizeCardNum(c.c) === clean);
+    if (dc?.r) return dc.r;
+    const rd = REGO_DB.find(e => e.c && normalizeCardNum(e.c) === clean);
+    if (rd?.r) return rd.r;
+    return "";
+  };
+
+  // Derive the fleetcard rego for an entry: prefer what the AI scanned off
+  // the card (e.cardRego), fall back to DB lookup by card number, else empty.
+  // This is what we match against the CSV's rego column — not the vehicle
+  // rego, which can legitimately differ from what's on the card.
+  const deriveFleetCardRego = (e) => {
+    if (e?.cardRego) return e.cardRego;
+    return lookupFleetCardRego(e?.fleetCardNumber);
+  };
+
   const buildReceiptGroupsFromEntries = (entriesList) => {
     const groups = {};
     for (const e of entriesList) {
@@ -11396,8 +11422,9 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         groups[key] = {
           key,
           date: e.date || "",
-          registration: e.registration || "",
-          cardRego: e.cardRego || "",
+          registration: e.registration || "",        // vehicle rego (what the driver actually drove)
+          cardRego: e.cardRego || "",                // raw cardRego field from entry (if AI scanned it)
+          fleetCardRego: deriveFleetCardRego(e),     // authoritative rego for matching — cardRego or DB lookup
           fleetCardNumber: e.fleetCardNumber || "",
           driverName: e.driverName || "",
           station: e.station || "",
@@ -11415,6 +11442,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       if (!g.station && e.station) g.station = e.station;
       if (!g.fleetCardNumber && e.fleetCardNumber) g.fleetCardNumber = e.fleetCardNumber;
       if (!g.cardRego && e.cardRego) g.cardRego = e.cardRego;
+      if (!g.fleetCardRego) g.fleetCardRego = deriveFleetCardRego(e);
     }
     return Object.values(groups);
   };
@@ -11438,16 +11466,20 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       return gTs && gTs === txnDate;
     });
     if (sameDay.length === 0) return { status: "missing", group: null };
-    // Primary match: card number
+    // Primary match: card number (same card → same transaction, unambiguous)
     const cardCandidates = cleanTxnCard
       ? sameDay.filter(g => g.entries.some(e => normalizeCardNum(e.fleetCardNumber) === cleanTxnCard))
       : [];
-    // Fallback: fleet-card rego (or vehicle rego if card rego is absent)
+    // Fallback: fleetcard rego — the rego on the card as reported in the CSV,
+    // NOT the vehicle rego. The two can legitimately differ (e.g. Carlos
+    // Carrillo drives EIA53F on a card embossed WIA53F), and matching against
+    // vehicle rego would either mis-match or produce false "missing" flags.
+    // So we only consider g.fleetCardRego (derived in buildReceiptGroups as
+    // cardRego || lookupFleetCardRego(cardNumber)).
     const regoCandidates = cleanTxnRego
       ? sameDay.filter(g => {
-          const gCardRego = (g.cardRego || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-          const gReg = (g.registration || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-          return gCardRego === cleanTxnRego || gReg === cleanTxnRego;
+          const gFleetRego = (g.fleetCardRego || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+          return gFleetRego && gFleetRego === cleanTxnRego;
         })
       : [];
     const candidates = cardCandidates.length > 0 ? cardCandidates : regoCandidates;
@@ -11590,6 +11622,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         (r.txn.cardNumber || "").includes(searchTerm) ||
         (r.txn.driver || "").toUpperCase().includes(searchTerm) ||
         (r.txn.station || "").toUpperCase().includes(searchTerm) ||
+        (r.group?.fleetCardRego || "").toUpperCase().includes(searchTerm) ||
         (r.group?.registration || "").toUpperCase().includes(searchTerm) ||
         (r.group?.driverName || "").toUpperCase().includes(searchTerm)
       );
@@ -11598,7 +11631,8 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     const searchedAppOnly = (reconFilter === "all" || reconFilter === "app_only")
       ? appOnlyGroups.filter(g => {
           if (!searchTerm) return true;
-          return (g.registration || "").toUpperCase().includes(searchTerm) ||
+          return (g.fleetCardRego || "").toUpperCase().includes(searchTerm) ||
+                 (g.registration || "").toUpperCase().includes(searchTerm) ||
                  (g.driverName || "").toUpperCase().includes(searchTerm) ||
                  normalizeCardNum(g.fleetCardNumber).includes(searchTerm);
         })
@@ -11692,7 +11726,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     const sortKey = (r) => {
       const d = parseDate(r.txn?.date || r.group?.date) || 0;
       const t = r.txn?.time || "";
-      const rego = r.txn?.rego || r.group?.registration || "";
+      // Prefer fleet-card rego (txn.rego / group.fleetCardRego) — that's the
+      // authoritative matching key. Fall back to vehicle rego only if neither
+      // side has a fleet-card rego.
+      const rego = r.txn?.rego || r.group?.fleetCardRego || r.group?.registration || "";
       const groupId = r.group?.key || r.txn?.id || "";
       return { d, t, rego, groupId };
     };
@@ -11715,6 +11752,8 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         (r.txn?.cardNumber || "").includes(searchTerm) ||
         (r.txn?.driver || "").toUpperCase().includes(searchTerm) ||
         (r.txn?.station || "").toUpperCase().includes(searchTerm) ||
+        (r.group?.fleetCardRego || "").toUpperCase().includes(searchTerm) ||
+        (r.entry?.cardRego || "").toUpperCase().includes(searchTerm) ||
         (r.entry?.registration || "").toUpperCase().includes(searchTerm) ||
         (r.entry?.driverName || "").toUpperCase().includes(searchTerm) ||
         (r.entry?.station || "").toUpperCase().includes(searchTerm) ||
@@ -11758,7 +11797,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     const blurCellStyle = (e) => { e.target.style.background = "transparent"; e.target.style.borderColor = "transparent"; };
 
     // Editable cell — uncontrolled input, commits on blur + Enter, Esc reverts.
-    const EditCell = ({ value, onCommit, align = "left", width, readOnly = false, placeholder = "", type = "text", title }) => (
+    const EditCell = ({ value, onCommit, align = "left", width, readOnly = false, placeholder = "", type = "text", title, muted = false }) => (
       <td style={{ ...cellStyle, textAlign: align, width }} title={title || (readOnly ? undefined : "Click to edit")}>
         {readOnly ? (
           <span style={{ padding: "6px 6px", display: "inline-block", color: "#64748b" }}>{value ?? ""}</span>
@@ -11773,7 +11812,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             onMouseLeave={(e) => { if (document.activeElement !== e.target) blurCellStyle(e); }}
             onBlur={(e) => { blurCellStyle(e); if (e.target.value !== String(value ?? "")) onCommit(e.target.value); }}
             onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { e.target.value = value ?? ""; e.target.blur(); } }}
-            style={{ ...inputStyle, textAlign: align }}
+            style={{ ...inputStyle, textAlign: align, ...(muted ? { color: "#64748b", fontSize: 11 } : {}) }}
           />
         )}
       </td>
@@ -11833,14 +11872,17 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         aoa.push([
           "— FLEET CARD REPORT —", "", "", "", "", "", "", "", "", "", "",
           "", // separator col
-          "— APP ENTRIES —", "", "", "", "", "", "", "", "", "", "", "",
+          "— APP ENTRIES —", "", "", "", "", "", "", "", "", "", "", "", "",
         ]);
         const sectionRowIdx = aoa.length - 1;
-        // Column headers
+        // Column headers. App side shows Rego (fleet card) as the primary matching
+        // key, with Vehicle (actual rego driven) as a secondary column — they're
+        // usually identical but diverge when a driver uses a card embossed with a
+        // different rego than the vehicle they're fuelling.
         aoa.push([
           "Status", "Date", "Time", "Rego", "Card", "Driver", "Station", "Product", "Litres", "$/L", "Total",
           "",
-          "Status", "Date", "Rego", "Driver", "Card", "Station", "Fuel", "Litres", "$/L", "Total", "Receipt", "Split",
+          "Status", "Date", "Rego", "Vehicle", "Driver", "Card", "Station", "Fuel", "Litres", "$/L", "Total", "Receipt", "Split",
         ]);
         const headerColsRowIdx = aoa.length - 1;
         const firstDataRowIdx = aoa.length; // data starts at this 0-based row
@@ -11879,6 +11921,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             appCols = [
               statusLabel + (r.splitTotal > 1 ? ` (${r.splitIdx + 1}/${r.splitTotal})` : ""),
               r.entry.date || "",
+              r.entry.cardRego || lookupFleetCardRego(r.entry.fleetCardNumber) || "",
               r.entry.registration || "",
               r.entry.driverName || "",
               r.entry.fleetCardNumber || "",
@@ -11892,14 +11935,16 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             ];
           } else {
             const followUp = r.txn?.driver ? `follow up with ${r.txn.driver}` : "driver unknown";
-            appCols = [statusLabel, "", "", "", "", "", `— no receipt lodged (${followUp}) —`, "", "", "", "", ""];
+            // Placeholder text lands in the Station column (index 6) — now aligned
+            // with the fleet-card side's "— no transaction —" placeholder.
+            appCols = [statusLabel, "", "", "", "", "", `— no receipt lodged (${followUp}) —`, "", "", "", "", "", ""];
           }
 
           aoa.push([...fleetCardCols, "", ...appCols]);
         }
 
         const ws = XLSXStyle.utils.aoa_to_sheet(aoa);
-        const numCols = 24; // A..X
+        const numCols = 25; // A..Y — app side gained a "Vehicle" column (index 15)
 
         // Helper — set a style on a cell (creating it if missing).
         const addrFor = (r, c) => XLSXStyle.utils.encode_cell({ r, c });
@@ -11967,7 +12012,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               fill: { patternType: "solid", fgColor: { rgb: isStatusCol ? c.accent : c.fill } },
               font: { bold: isStatusCol, sz: 10, color: { rgb: isStatusCol ? c.text : "FF0F172A" } },
               alignment: {
-                horizontal: isStatusCol ? "center" : (col >= 8 && col <= 10) || (col >= 19 && col <= 21) ? "right" : "left",
+                // Right-align numeric columns: L-side Litres/$/L/Total (8–10) and
+                // R-side Litres/$/L/Total (20–22, shifted +1 from old layout after
+                // the Vehicle column was inserted at col 15).
+                horizontal: isStatusCol ? "center" : (col >= 8 && col <= 10) || (col >= 20 && col <= 22) ? "right" : "left",
                 vertical: "center",
                 wrapText: false,
               },
@@ -11992,7 +12040,8 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           { wch: 2 },  // separator
           { wch: 22 }, // R-Status
           { wch: 11 }, // R-Date
-          { wch: 9 },  // R-Rego
+          { wch: 9 },  // R-Rego (fleet card)
+          { wch: 9 },  // R-Vehicle
           { wch: 18 }, // R-Driver
           { wch: 20 }, // R-Card
           { wch: 30 }, // R-Station
@@ -12272,7 +12321,8 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                         <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 22 }}></th>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 76 }}>Date</th>
-                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 64 }}>Rego</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 64 }} title="Rego as printed on the fleet card (authoritative for matching)">Rego</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 600, color: "#94a3b8", width: 54 }} title="Vehicle rego the driver actually drove (often matches, but can differ)">Vehicle</th>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Driver</th>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Station</th>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 62 }}>Fuel</th>
@@ -12291,7 +12341,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                             return (
                               <tr key={`R-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
                                 <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>{st.label}</td>
-                                <td colSpan={9} style={{ ...cellStyle, color: "#94a3b8", fontStyle: "italic", padding: "0 8px" }}>
+                                <td colSpan={10} style={{ ...cellStyle, color: "#94a3b8", fontStyle: "italic", padding: "0 8px" }}>
                                   — no receipt lodged{r.txn?.driver ? ` · follow up with ${r.txn.driver}` : ""} —
                                 </td>
                               </tr>
@@ -12307,7 +12357,18 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                                 {r.splitTotal > 1 && <div style={{ fontSize: 8, color: st.text, fontWeight: 600, marginTop: 1 }}>{r.splitIdx + 1}/{r.splitTotal}</div>}
                               </td>
                               <EditCell value={e.date} onCommit={v => saveEntryEdit(e.id, "date", v)} />
-                              <EditCell value={e.registration} onCommit={v => saveEntryEdit(e.id, "registration", v)} />
+                              <EditCell
+                                value={e.cardRego}
+                                onCommit={v => saveEntryEdit(e.id, "cardRego", v)}
+                                placeholder={lookupFleetCardRego(e.fleetCardNumber) || ""}
+                                title="Rego printed on the fleet card (used for matching)"
+                              />
+                              <EditCell
+                                value={e.registration}
+                                onCommit={v => saveEntryEdit(e.id, "registration", v)}
+                                muted
+                                title="Vehicle rego actually driven — often same as fleet card rego, but can differ"
+                              />
                               <EditCell value={e.driverName} onCommit={v => saveEntryEdit(e.id, "driverName", v)} />
                               <EditCell value={e.station} onCommit={v => saveEntryEdit(e.id, "station", v)} />
                               <EditCell value={e.fuelType} onCommit={v => saveEntryEdit(e.id, "fuelType", v)} />
