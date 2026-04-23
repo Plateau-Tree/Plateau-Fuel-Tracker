@@ -12106,8 +12106,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           </div>
         </div>
 
-        {/* Stats bar */}
-        {fleetCardTxns.length > 0 && (
+        {/* Stats bar + dual spreadsheet — show whenever EITHER side has data,
+            so clearing the imported report leaves the App Entries panel up
+            for easy visual comparison before re-uploading. */}
+        {(fleetCardTxns.length > 0 || inRangeEntries.length > 0) && (
           <>
             <div style={{
               display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, marginBottom: 8,
@@ -12171,9 +12173,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             {/* ── Dual spreadsheet layout ──────────────────────────────── */}
             {displayRows.length === 0 ? (
               <div style={{ textAlign: "center", padding: 30, color: "#94a3b8", fontSize: 13, background: "white", border: "1px solid #e2e8f0", borderRadius: 10 }}>
-                {fleetCardTxns.length === 0
-                  ? "Upload a fleet card report to begin"
-                  : fuelTxns.length === 0 && receiptGroups.length === 0
+                {fuelTxns.length === 0 && receiptGroups.length === 0
                   ? "No transactions or app entries in the selected date range"
                   : "Nothing matches the current filter"}
               </div>
@@ -12356,8 +12356,11 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                   2. Visible only   — respects date range + filter + search
                   3. All            — everything ever imported (nuclear)
                 App receipt entries (`entries`) are NEVER touched by any of
-                these — only the imported FleetCard report rows. */}
-            {(() => {
+                these — only the imported FleetCard report rows.
+                Hidden entirely when there are no imports to clear, so the
+                admin can keep comparing the App Entries panel to incoming
+                data without a stale "Clear all (0)" panel getting in the way. */}
+            {fleetCardTxns.length > 0 && (() => {
               const visibleTxnIds = new Set(searched.map(r => r.txn?.id).filter(Boolean));
               const visibleCount = visibleTxnIds.size;
               const rangeCount = inRangeTxns.length;
@@ -12453,7 +12456,12 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           </>
         )}
 
-        {fleetCardTxns.length === 0 && (
+        {/* Only show the full empty-state CTA when there's literally nothing
+            to look at — no imports AND no app entries in the selected range.
+            If app entries exist but imports are empty, the dual layout above
+            takes over and the right panel keeps those entries visible for
+            visual comparison. */}
+        {fleetCardTxns.length === 0 && inRangeEntries.length === 0 && (
           <div style={{ textAlign: "center", padding: 30, color: "#94a3b8" }}>
             <div style={{ fontSize: 14, marginBottom: 6 }}>No fleet card data imported yet</div>
             <div style={{ fontSize: 12 }}>Upload a CSV or Excel file from your fleet card provider to start reconciling</div>
