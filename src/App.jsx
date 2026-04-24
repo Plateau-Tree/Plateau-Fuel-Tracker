@@ -11563,53 +11563,82 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
   //                (signals the receipt scan likely got the amount wrong)
   //   missing    — no app entry at all for this txn's card/rego on this date
   //                (signals the driver hasn't lodged the receipt yet)
-  const matchTxnToReceiptGroup = (txn, groups) => {
-    if (!txn.date) return { status: "missing", group: null };
+  // Find every plausible receipt group a txn COULD match: same date AND
+  // (same card number OR — falling back — same fleet-card rego). Returns
+  // the groups unranked; caller decides which to assign.
+  const findTxnCandidates = (txn, groups) => {
+    if (!txn.date) return [];
     const txnDate = parseDate(txn.date);
-    if (!txnDate) return { status: "missing", group: null };
+    if (!txnDate) return [];
     const cleanTxnCard = normalizeCardNum(txn.cardNumber);
     const cleanTxnRego = (txn.rego || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-    // Narrow to groups on the same day
     const sameDay = groups.filter(g => {
       const gTs = parseDate(g.date);
       return gTs && gTs === txnDate;
     });
-    if (sameDay.length === 0) return { status: "missing", group: null };
-    // Primary match: card number (same card → same transaction, unambiguous)
+    if (sameDay.length === 0) return [];
     const cardCandidates = cleanTxnCard
       ? sameDay.filter(g => g.entries.some(e => normalizeCardNum(e.fleetCardNumber) === cleanTxnCard))
       : [];
-    // Fallback: fleetcard rego — the rego on the card as reported in the CSV,
-    // NOT the vehicle rego. The two can legitimately differ (e.g. Carlos
-    // Carrillo drives EIA53F on a card embossed WIA53F), and matching against
-    // vehicle rego would either mis-match or produce false "missing" flags.
-    // So we only consider g.fleetCardRego (derived in buildReceiptGroups as
-    // cardRego || lookupFleetCardRego(cardNumber)).
-    const regoCandidates = cleanTxnRego
-      ? sameDay.filter(g => {
-          const gFleetRego = (g.fleetCardRego || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-          return gFleetRego && gFleetRego === cleanTxnRego;
-        })
-      : [];
-    const candidates = cardCandidates.length > 0 ? cardCandidates : regoCandidates;
-    if (candidates.length === 0) return { status: "missing", group: null };
-    // Pick the candidate with the smallest cost difference
-    let best = candidates[0], bestDiff = Infinity;
-    for (const g of candidates) {
-      if (txn.cost != null && g.totalCost > 0) {
-        const diff = Math.abs(txn.cost - g.totalCost);
-        if (diff < bestDiff) { bestDiff = diff; best = g; }
+    if (cardCandidates.length > 0) return cardCandidates;
+    // Fallback: fleet-card rego (NOT vehicle rego — Carlos drives EIA53F
+    // on a WIA53F card; matching on vehicle rego would misroute).
+    if (!cleanTxnRego) return [];
+    return sameDay.filter(g => {
+      const gFleetRego = (g.fleetCardRego || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+      return gFleetRego && gFleetRego === cleanTxnRego;
+    });
+  };
+
+  // Assign each fleet-card txn to AT MOST ONE receipt group. A receipt
+  // group can likewise only belong to one txn. Without this, the same
+  // app receipt was showing up twice in the reconciliation when two
+  // CSV transactions shared a card+date+rego — each txn independently
+  // picked its best candidate, and the smaller-cost side "duplicated"
+  // the receipt row on screen.
+  //
+  // Algorithm: enumerate every plausible (txn, group) pair with its
+  // cost diff, sort smallest-diff first, then greedily claim pairs
+  // where neither side is already claimed. This guarantees the tightest
+  // cost matches win — a near-exact $100.01 pair beats a sloppy $105
+  // pair for the same group, even when the $105 txn was processed first.
+  // Pairs without a comparable cost sort last (Infinity) and only claim
+  // a group if no costed pair already took it.
+  const assignTxnsToGroups = (txns, groups) => {
+    const pairs = [];
+    for (const txn of txns) {
+      const cands = findTxnCandidates(txn, groups);
+      for (const g of cands) {
+        const diff = (txn.cost != null && g.totalCost > 0)
+          ? Math.abs(txn.cost - g.totalCost)
+          : Infinity;
+        pairs.push({ txn, group: g, diff });
       }
     }
-    if (txn.cost != null && best.totalCost > 0) {
-      const diff = Math.abs(txn.cost - best.totalCost);
-      const pct = (diff / best.totalCost) * 100;
-      // Tolerance: $2 OR 5%. Both must be exceeded to flag as scan error.
-      if (diff > 2 && pct > 5) return { status: "scan_error", group: best, diff };
-      return { status: "matched", group: best, diff };
+    pairs.sort((a, b) => a.diff - b.diff);
+
+    const assignments = new Map();   // txn.id -> { group, diff }
+    const claimedGroups = new Set(); // group.key
+    for (const p of pairs) {
+      if (assignments.has(p.txn.id)) continue;
+      if (claimedGroups.has(p.group.key)) continue;
+      assignments.set(p.txn.id, { group: p.group, diff: p.diff === Infinity ? null : p.diff });
+      claimedGroups.add(p.group.key);
     }
-    // No cost on txn side — consider matched if card/rego aligned
-    return { status: "matched", group: best, diff: null };
+    return { assignments, claimedGroups };
+  };
+
+  // Resolve a (txn, group, diff) assignment into the status the UI uses.
+  // Tolerance: $2 AND 5% must BOTH be exceeded to flag as scan_error —
+  // mirrors the previous behaviour so match counts stay stable.
+  const statusForAssignment = (txn, group, diff) => {
+    if (!group) return { status: "missing", group: null, diff: null };
+    if (diff == null) return { status: "matched", group, diff: null }; // no cost to compare
+    if (group.totalCost > 0) {
+      const pct = (diff / group.totalCost) * 100;
+      if (diff > 2 && pct > 5) return { status: "scan_error", group, diff };
+    }
+    return { status: "matched", group, diff };
   };
 
   // ── Reconciliation View ───────────────────────────────────────────────────
@@ -11697,11 +11726,15 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     const inRangeEntries = entries.filter(e => inRange(e.date));
     const receiptGroups = buildReceiptGroupsFromEntries(inRangeEntries);
 
-    // Match each fleet-card transaction to a receipt group
-    const results = fuelTxns.map(txn => ({
-      txn,
-      ...matchTxnToReceiptGroup(txn, receiptGroups),
-    }));
+    // Globally assign txns to receipt groups so no group is claimed twice
+    // (see assignTxnsToGroups for the algorithm). Each txn then resolves
+    // to matched / scan_error / missing based on its assigned group's
+    // cost diff.
+    const { assignments, claimedGroups } = assignTxnsToGroups(fuelTxns, receiptGroups);
+    const results = fuelTxns.map(txn => {
+      const a = assignments.get(txn.id);
+      return { txn, ...statusForAssignment(txn, a?.group || null, a?.diff ?? null) };
+    });
 
     const matched = results.filter(r => r.status === "matched");
     const scanErrors = results.filter(r => r.status === "scan_error");
@@ -11711,8 +11744,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     // Usually rare (would mean: driver lodged a receipt but no fleet-card
     // transaction was found). Could be a manual/cash entry, a wrong card
     // number, or the FleetCard report hasn't been re-downloaded yet.
-    const matchedGroupKeys = new Set(results.filter(r => r.group).map(r => r.group.key));
-    const appOnlyGroups = receiptGroups.filter(g => !matchedGroupKeys.has(g.key));
+    const appOnlyGroups = receiptGroups.filter(g => !claimedGroups.has(g.key));
 
     // Filter
     const filtered = reconFilter === "all" ? results
