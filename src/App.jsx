@@ -14068,16 +14068,26 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       )}
 
       <div style={{
-        // Reconcile is an admin-only desktop workflow with two side-by-side
-        // spreadsheets that earn every horizontal pixel — lift its cap well
-        // above the other admin views. The 2400px ceiling keeps ultra-wide
-        // monitors from stretching rows unreadably.
+        // Per-view max width. Admin workflows (dashboard / data / cards /
+        // drivers / reconcile) all run on a desktop monitor and benefit
+        // from every horizontal pixel — tables with 10+ columns were
+        // scrolling horizontally at the old 960px cap and the admin asked
+        // to see them fit the page. Reconcile keeps its bigger ceiling
+        // because its two side-by-side spreadsheets double the width
+        // appetite. The 1800px / 2400px caps stop ultra-wide monitors
+        // from stretching rows to unreadable line lengths.
+        //
+        // Submit (driver entry flow) stays slim — drivers submit from
+        // their phones, and the 520px column keeps the form readable on
+        // a narrow screen.
         maxWidth: view === "reconcile"
           ? "min(100%, 2400px)"
-          : (view === "data" || view === "dashboard" || view === "cards" || view === "drivers") ? 960
+          : (view === "data" || view === "dashboard" || view === "cards" || view === "drivers") ? "min(100%, 1800px)"
           : 520,
         margin: "0 auto",
-        padding: view === "reconcile" ? "24px 20px" : "24px 16px",
+        padding: view === "reconcile" ? "24px 20px"
+          : (view === "data" || view === "dashboard" || view === "cards" || view === "drivers") ? "24px 20px"
+          : "24px 16px",
         transition: "max-width 0.3s",
       }}>
         {view === "submit" && (
