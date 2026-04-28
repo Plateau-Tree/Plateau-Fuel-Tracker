@@ -3949,6 +3949,15 @@ export default function App() {
   // Tracks whether an edit modal is open — cloud refresh pauses while set so
   // admin's unsaved form state isn't clobbered by a Realtime push mid-edit.
   const editingInProgressRef = useRef(false);
+  // In-flight cloud saves. The post-close "force refresh" used to fetch
+  // cloud state before fire-and-forget save() promises had landed, then
+  // overwrite local with stale cloud data — admin's resolved flags would
+  // pop back into the open list "for a second" before being re-resolved.
+  // Track which entries / flags have a save in flight so refreshFromCloud
+  // can skip their cloud copies until the write settles.
+  const pendingEntrySavesRef = useRef(new Set());
+  const pendingFlagSavesRef = useRef(new Set());
+  const resolvedFlagsRef = useRef({});
 
   const [apiKey, setApiKey] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
@@ -4026,6 +4035,9 @@ export default function App() {
   const [showAiReview, setShowAiReview] = useState(false);
   const [showAiFlags, setShowAiFlags] = useState(false);
   const [resolvedFlags, setResolvedFlags] = useState({}); // { "flagId": { by, note, at } }
+  // Mirror resolvedFlags into a ref so refreshFromCloud and async cloud
+  // saves can read the latest value without stale-closure surprises.
+  useEffect(() => { resolvedFlagsRef.current = resolvedFlags; }, [resolvedFlags]);
   const [flagsFilter, setFlagsFilter] = useState("open"); // "open" | "resolved" | "all"
   const [aiFlagsFilter, setAiFlagsFilter] = useState("open"); // separate filter for AI flags modal
   const [replyingFlag, setReplyingFlag] = useState(null); // flagId currently being responded to
@@ -4547,9 +4559,14 @@ export default function App() {
     entriesRef.current = autofilled;
     setEntries(autofilled);
     try { await window.storage.set("fuel_entries", JSON.stringify(autofilled)); } catch (_) {}
-    // Sync to cloud: save only the changed entry (faster than saving everything)
+    // Sync to cloud: save only the changed entry (faster than saving everything).
+    // Mark the entry's id as pending so a refresh that fires before the cloud
+    // save lands won't replace our just-saved value with the stale cloud copy.
     if (normChanged) {
-      db.saveEntry(normChanged).catch(() => {});
+      pendingEntrySavesRef.current.add(normChanged.id);
+      db.saveEntry(normChanged)
+        .catch(() => {})
+        .finally(() => { pendingEntrySavesRef.current.delete(normChanged.id); });
     }
   };
 
@@ -4614,12 +4631,16 @@ export default function App() {
   // persistResolved saves flag resolutions to both local and cloud
   const persistResolved = async (newData, changedFlagId = null, deleted = false) => {
     setResolvedFlags(newData);
+    resolvedFlagsRef.current = newData;
     try { await window.storage.set("fuel_resolved_flags", JSON.stringify(newData)); } catch (_) {}
     if (changedFlagId) {
+      const clearPending = () => { pendingFlagSavesRef.current.delete(changedFlagId); };
       if (deleted) {
-        db.deleteResolvedFlag(changedFlagId).catch(() => {});
+        db.deleteResolvedFlag(changedFlagId).catch(() => {}).finally(clearPending);
       } else if (newData[changedFlagId]) {
-        db.saveResolvedFlag(changedFlagId, newData[changedFlagId]).catch(() => {});
+        db.saveResolvedFlag(changedFlagId, newData[changedFlagId]).catch(() => {}).finally(clearPending);
+      } else {
+        clearPending();
       }
     }
   };
@@ -4657,12 +4678,31 @@ export default function App() {
         // cardRego / fleetCardNumber immediately. Any newly filled row
         // also gets pushed back to Supabase so the next device downloads
         // the completed record instead of re-filling it.
+        //
+        // For any entry whose save is currently in flight, prefer the
+        // local copy — the cloud's response is from BEFORE our save and
+        // would clobber the just-saved value. Once the save settles the
+        // pending marker clears and the next refresh picks up the cloud
+        // copy normally.
+        const pendingIds = pendingEntrySavesRef.current;
+        const localById = new Map((entriesRef.current || []).map(e => [e.id, e]));
         const filled = [];
         const changed = [];
         for (const e of cloudEntries) {
+          if (pendingIds.has(e.id) && localById.has(e.id)) {
+            filled.push(localById.get(e.id));
+            continue;
+          }
           const f = autofillCardFields(e);
           filled.push(f);
           if (f !== e) changed.push(f);
+        }
+        // Locally-created entries whose save hasn't reached the cloud yet
+        // (e.g. just-submitted on this device) won't appear in cloudEntries —
+        // re-include them so they don't vanish from the UI.
+        const cloudIds = new Set(cloudEntries.map(e => e.id));
+        for (const id of pendingIds) {
+          if (!cloudIds.has(id) && localById.has(id)) filled.push(localById.get(id));
         }
         setEntries(filled);
         entriesRef.current = filled;
@@ -4677,8 +4717,26 @@ export default function App() {
         try { await window.storage.set("fuel_service_data", JSON.stringify(cloudService)); } catch (_) {}
       }
       if (cloudResolved) {
-        setResolvedFlags(cloudResolved);
-        try { await window.storage.set("fuel_resolved_flags", JSON.stringify(cloudResolved)); } catch (_) {}
+        // Same race-protection as entries: if a flag's save is still in
+        // flight, prefer the local resolution state for that fid (the
+        // cloud's response was generated before our write). For an
+        // unresolve in flight that means keeping it absent locally; for
+        // a resolve in flight, keeping it set locally.
+        const pendingFids = pendingFlagSavesRef.current;
+        const localResolved = resolvedFlagsRef.current || {};
+        let merged;
+        if (pendingFids.size === 0) {
+          merged = cloudResolved;
+        } else {
+          merged = { ...cloudResolved };
+          for (const fid of pendingFids) {
+            if (localResolved[fid]) merged[fid] = localResolved[fid];
+            else delete merged[fid];
+          }
+        }
+        setResolvedFlags(merged);
+        resolvedFlagsRef.current = merged;
+        try { await window.storage.set("fuel_resolved_flags", JSON.stringify(merged)); } catch (_) {}
       }
       if (cloudApiKey) {
         setApiKey(cloudApiKey);
@@ -4795,12 +4853,14 @@ export default function App() {
 
   const resolveFlag = (fid, note, by) => {
     const flagData = { by: by || "Admin", note: note || "", at: new Date().toISOString() };
-    const updated = { ...resolvedFlags, [fid]: flagData };
+    const updated = { ...resolvedFlagsRef.current, [fid]: flagData };
+    pendingFlagSavesRef.current.add(fid);
     persistResolved(updated, fid);
   };
 
   const unresolveFlag = (fid) => {
-    const { [fid]: _, ...rest } = resolvedFlags;
+    const { [fid]: _, ...rest } = resolvedFlagsRef.current;
+    pendingFlagSavesRef.current.add(fid);
     persistResolved(rest, fid, true);
   };
 
@@ -4810,12 +4870,20 @@ export default function App() {
     if (!fids || fids.length === 0) return;
     const at = new Date().toISOString();
     const flagData = { by: by || "Admin", note: note || "Bulk resolved", at };
-    const updated = { ...resolvedFlags };
+    const updated = { ...resolvedFlagsRef.current };
     for (const fid of fids) updated[fid] = flagData;
     setResolvedFlags(updated);
+    resolvedFlagsRef.current = updated;
     try { await window.storage.set("fuel_resolved_flags", JSON.stringify(updated)); } catch (_) {}
+    // Mark each fid as pending so refreshFromCloud doesn't blow our local
+    // resolution away if it fires before the cloud save lands.
+    for (const fid of fids) pendingFlagSavesRef.current.add(fid);
     // Fire all cloud writes in parallel — failures don't block the UI.
-    await Promise.all(fids.map(fid => db.saveResolvedFlag(fid, flagData).catch(() => {})));
+    await Promise.all(fids.map(fid =>
+      db.saveResolvedFlag(fid, flagData)
+        .catch(() => {})
+        .finally(() => { pendingFlagSavesRef.current.delete(fid); })
+    ));
     showToast(`Resolved ${fids.length} issue${fids.length === 1 ? "" : "s"}`);
   };
 
