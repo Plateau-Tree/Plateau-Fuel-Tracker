@@ -4621,6 +4621,29 @@ export default function App() {
           console.log(`[Migration] Card autofill — backfilled ${changedAutofillEntries.length} entr${changedAutofillEntries.length === 1 ? "y" : "ies"}`);
         }
 
+        // ── One-time Opus 4.7 default reset (v1) ──
+        // Pricing for Opus 4.7 (\$5/\$25 per Mtok) collapsed the old
+        // "use cheap models for cost" trade-off, so it's now the
+        // recommended default for all three scan tasks. Devices that
+        // already saved a prior selection (Haiku/Sonnet/Sonnet from the
+        // earlier rollout) need a one-shot reset to pick up the new
+        // defaults — this writes Opus 4.7 across the board to both
+        // localStorage and Supabase, then marks the migration done.
+        // Future admin changes via Settings still persist normally.
+        const OPUS47_DEFAULT_KEY = "fuel_api_models_opus47_default_v1";
+        let opus47Done = false;
+        try { opus47Done = !!(await window.storage.get(OPUS47_DEFAULT_KEY))?.value; } catch (_) {}
+        if (!opus47Done) {
+          const json = JSON.stringify(DEFAULT_API_MODELS);
+          setApiModels(DEFAULT_API_MODELS);
+          try { await window.storage.set("fuel_api_models", json); } catch (_) {}
+          if (supabase) {
+            try { await db.saveSetting("api_models", json); } catch (_) {}
+          }
+          try { await window.storage.set(OPUS47_DEFAULT_KEY, "done"); } catch (_) {}
+          console.log("[Migration] API model defaults reset to Opus 4.7 across all tasks");
+        }
+
         setEntries(localEntries);
         setServiceData(localService);
         setResolvedFlags(localResolved);
