@@ -2335,20 +2335,27 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMap
 // row; the "Custom" option in Settings lets admin enter any model id
 // without touching code.
 const CLAUDE_MODEL_OPTIONS = [
-  { id: "claude-haiku-4-5-20251001",  label: "Haiku 4.5",  tier: "fast",     note: "Cheapest, fastest. Plenty for orientation / simple OCR." },
-  { id: "claude-sonnet-4-20250514",   label: "Sonnet 4",   tier: "balanced", note: "Balanced cost vs accuracy." },
-  { id: "claude-sonnet-4-5-20250929", label: "Sonnet 4.5", tier: "balanced", note: "Newer Sonnet. Recommended default for receipts." },
-  { id: "claude-opus-4-20250514",     label: "Opus 4",     tier: "strong",   note: "Old default. Highest cost — only worth it on tough receipts." },
-  { id: "claude-opus-4-5-20250929",   label: "Opus 4.5",   tier: "strong",   note: "Newer Opus. Best accuracy on tricky receipts; very expensive." },
+  { id: "claude-haiku-4-5-20251001",  label: "Haiku 4.5",  tier: "fast",     note: "Cheapest tier. Plenty for orientation / simple OCR." },
+  { id: "claude-sonnet-4-20250514",   label: "Sonnet 4",   tier: "balanced", note: "Balanced tier. Older Sonnet." },
+  { id: "claude-sonnet-4-5-20250929", label: "Sonnet 4.5", tier: "balanced", note: "Balanced tier. Solid budget pick for receipts." },
+  // Opus 4.7 — at $5/$25 per Mtok it's 3x cheaper than the older Opus 4 / 4.5
+  // and only ~1.7x more than Sonnet 4.5, so it's the new sensible "best
+  // accuracy without paying the old Opus tax" default.
+  { id: "claude-opus-4-7",            label: "Opus 4.7",   tier: "strong",   note: "$5 / $25 per Mtok. Recommended default — top accuracy at Sonnet-ish cost." },
+  { id: "claude-opus-4-20250514",     label: "Opus 4",     tier: "strong",   note: "$15 / $75 per Mtok. Old default — superseded by Opus 4.7 at 3x lower cost." },
+  { id: "claude-opus-4-5-20250929",   label: "Opus 4.5",   tier: "strong",   note: "$15 / $75 per Mtok. Most expensive — usually only worth it for unusual edge cases." },
 ];
 
-// Per-task defaults if the admin hasn't picked anything yet. The receipt
-// default switched from Opus 4 → Sonnet 4.5 here — a ~5x cost cut at
-// negligible accuracy impact on standard fuel receipts.
+// Per-task defaults if the admin hasn't picked anything yet. With Opus 4.7
+// priced at ~$0.028 per scan call (vs ~$0.083 for Opus 4 and ~$0.017 for
+// Sonnet 4.5), Opus 4.7 is the new default across all three tasks — the
+// accuracy headroom is worth the small premium over Sonnet for receipts
+// where misreads cost real reconciliation time. Admin can flip orientation
+// back to Haiku 4.5 in two clicks if they want to squeeze more cost out.
 const DEFAULT_API_MODELS = {
-  orientation: "claude-haiku-4-5-20251001",
-  receipt:     "claude-sonnet-4-5-20250929",
-  card:        "claude-sonnet-4-5-20250929",
+  orientation: "claude-opus-4-7",
+  receipt:     "claude-opus-4-7",
+  card:        "claude-opus-4-7",
 };
 
 const API_TASK_LABELS = {
@@ -14080,7 +14087,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               >Reset to defaults</button>
             </div>
             <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
-              Pick which Claude vision model handles each scan. Cheap models on simple tasks (orientation), stronger models on harder ones (receipts) is the typical setup.
+              Pick which Claude vision model handles each scan. Defaults to Opus 4.7 across the board ($5/$25 per Mtok — best accuracy without the old-Opus price). For tighter cost: flip Orientation to Haiku 4.5 (a ~5x savings on that task with no accuracy hit).
             </div>
             {tasks.map(task => {
               const meta = API_TASK_LABELS[task];
