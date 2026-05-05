@@ -568,6 +568,18 @@ function getKnownDriverNames() {
   return [...out];
 }
 
+// Admin-curated driver-name merges (Settings → Merge driver names). Mutated
+// from inside App via setLearnedDriverAliasesDB once the cloud-loaded value
+// arrives. Keys are lower-case, values are the target display name.
+//
+// Kept module-scope so the resolver below can read it without dragging
+// component state through every caller — same reason DRIVER_NAME_ALIASES
+// itself is module-scope.
+let _learnedDriverAliases = {};
+function setLearnedDriverAliasesDB(map) {
+  _learnedDriverAliases = (map && typeof map === "object") ? map : {};
+}
+
 // Run a typed driver name through alias / nickname / typo resolution.
 // Returns { name, resolution }:
 //   · high-confidence (exact / alias / nickname) — `name` is the canonical
@@ -583,6 +595,17 @@ function getKnownDriverNames() {
 // keeping it App-scoped silently broke Save buttons inside the modals.
 function canonicalizeDriverName(typed) {
   if (!typed) return { name: typed, resolution: null };
+  const lower = (typed || "").trim().toLowerCase().replace(/\s+/g, " ");
+  // Admin-curated merge takes priority over everything — explicit override.
+  if (_learnedDriverAliases[lower]) {
+    const target = _learnedDriverAliases[lower];
+    return {
+      name: target,
+      resolution: target.trim() !== (typed || "").trim()
+        ? { from: typed.trim(), canonical: target, confidence: "alias" }
+        : null,
+    };
+  }
   const res = resolveDriverName(typed, getKnownDriverNames());
   if (res.confidence === "exact" || res.confidence === "alias" || res.confidence === "nickname") {
     return {
@@ -4070,7 +4093,18 @@ export default function App() {
   // via localStorage + Supabase setting "api_models" so all devices use
   // the same models. Falls back to DEFAULT_API_MODELS if nothing saved.
   const [apiModels, setApiModels] = useState(DEFAULT_API_MODELS);
+  // Admin-curated "merge driver names" map — persisted via localStorage +
+  // Supabase setting "learned_driver_aliases". Keys are lower-case source
+  // spellings, values are the canonical display name. Synced into the
+  // module-level _learnedDriverAliases mirror via setLearnedDriverAliasesDB
+  // whenever this state changes, so canonicalizeDriverName picks it up.
+  const [learnedDriverAliases, setLearnedDriverAliases] = useState({});
+  useEffect(() => { setLearnedDriverAliasesDB(learnedDriverAliases); }, [learnedDriverAliases]);
   const [showKey, setShowKey] = useState(false);
+  // Settings → Merge driver names form state. Local-only; clears after a
+  // successful merge.
+  const [mergeFrom, setMergeFrom] = useState("");
+  const [mergeTo, setMergeTo] = useState("");
   const [adminPasscode, setAdminPasscode] = useState("admin"); // default passcode
   const [passcodeInput, setPasscodeInput] = useState("");
 
@@ -4361,6 +4395,18 @@ export default function App() {
             setApiModels({ ...DEFAULT_API_MODELS, ...loaded });
           }
         } catch (_) {}
+        // Admin-curated driver name merges — load local cache first; cloud
+        // refresh path syncs from Supabase for cross-device alignment.
+        try {
+          const aRes = await window.storage.get("fuel_learned_driver_aliases");
+          if (aRes?.value) {
+            const loaded = JSON.parse(aRes.value);
+            if (loaded && typeof loaded === "object") {
+              setLearnedDriverAliases(loaded);
+              setLearnedDriverAliasesDB(loaded);
+            }
+          }
+        } catch (_) {}
         // Load trash bin (soft-deleted entries) + auto-purge anything older
         // than the retention window so the bin can't grow without bound.
         if (trRes?.value) {
@@ -4427,6 +4473,18 @@ export default function App() {
             try {
               setApiModels({ ...DEFAULT_API_MODELS, ...JSON.parse(raw) });
               window.storage.set("fuel_api_models", raw).catch(() => {});
+            } catch (_) {}
+          }).catch(() => {});
+          // Admin-curated driver name merges from cloud — overrides local.
+          db.loadSetting("learned_driver_aliases").then(raw => {
+            if (!raw) return;
+            try {
+              const loaded = JSON.parse(raw);
+              if (loaded && typeof loaded === "object") {
+                setLearnedDriverAliases(loaded);
+                setLearnedDriverAliasesDB(loaded);
+                window.storage.set("fuel_learned_driver_aliases", raw).catch(() => {});
+              }
             } catch (_) {}
           }).catch(() => {});
           // Load fleet card transactions
@@ -4899,6 +4957,20 @@ export default function App() {
           try { window.storage.set("fuel_api_models", cloudApiModels); } catch (_) {}
         } catch (_) {}
       }
+      // Pull admin-curated driver-name merges so cross-device alignment
+      // happens automatically (admin merges on desktop -> drivers' phones
+      // pick up the alias on next refresh).
+      db.loadSetting("learned_driver_aliases").then(raw => {
+        if (!raw) return;
+        try {
+          const loaded = JSON.parse(raw);
+          if (loaded && typeof loaded === "object") {
+            setLearnedDriverAliases(loaded);
+            setLearnedDriverAliasesDB(loaded);
+            window.storage.set("fuel_learned_driver_aliases", raw).catch(() => {});
+          }
+        } catch (_) {}
+      }).catch(() => {});
       // Fire-and-forget the settings-backed collections
       db.loadFleetCardTransactions().then(txns => { if (txns) setFleetCardTxns(txns); }).catch(() => {});
       db.loadSetting("learned_card_mappings").then(raw => {
@@ -6477,6 +6549,70 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
         showToast(`Driver "${safeName}" deleted · ${modified.length} entr${modified.length === 1 ? "y" : "ies"} renamed`);
       },
     });
+  };
+
+  // Persist the admin-curated alias map to local + cloud and update the
+  // module-level mirror so future submissions resolve through it.
+  const persistDriverAliases = async (next) => {
+    setLearnedDriverAliases(next);
+    setLearnedDriverAliasesDB(next);
+    const json = JSON.stringify(next);
+    try { await window.storage.set("fuel_learned_driver_aliases", json); } catch (_) {}
+    try { await db.saveSetting("learned_driver_aliases", json); } catch (_) {}
+  };
+
+  // Bulk-rename every entry with driverName === fromName to canonical
+  // toName, then store fromName -> toName in the alias map so any
+  // FUTURE submissions of the source spelling auto-resolve to canonical.
+  // Runs idempotently — calling with no entries to rename just saves
+  // the alias and toasts "0 entries renamed".
+  const mergeDriverNames = async (fromName, toName) => {
+    const from = (fromName || "").trim();
+    const to = (toName || "").trim();
+    if (!from || !to) return { count: 0 };
+    if (from.toLowerCase() === to.toLowerCase()) return { count: 0 };
+
+    const fromLower = from.toLowerCase();
+    const modified = [];
+    const updated = entriesRef.current.map(e => {
+      const dn = (e.driverName || e.driver || "").trim().toLowerCase();
+      if (dn !== fromLower) return e;
+      const next = { ...e, driverName: to, _driverNameResolution: null };
+      modified.push(next);
+      return next;
+    });
+
+    if (modified.length > 0) {
+      entriesRef.current = updated;
+      setEntries(updated);
+      try { await window.storage.set("fuel_entries", JSON.stringify(updated)); } catch (_) {}
+      // Cloud-save with pending tracking so the post-merge refresh can't
+      // replay stale rows and undo the rename (mirrors the race fix from
+      // commit 11ee76c).
+      for (const e of modified) {
+        pendingEntrySavesRef.current.add(e.id);
+        db.saveEntry(e).catch(() => {}).finally(() => {
+          pendingEntrySavesRef.current.delete(e.id);
+        });
+      }
+    }
+
+    // Always remember the alias — even when 0 entries match (admin can
+    // pre-register a future-proof mapping for typos that haven't appeared
+    // in the data yet).
+    const nextAliases = { ...learnedDriverAliases, [fromLower]: to };
+    await persistDriverAliases(nextAliases);
+
+    showToast(`Merged "${from}" → "${to}" · ${modified.length} entr${modified.length === 1 ? "y" : "ies"} renamed`);
+    return { count: modified.length };
+  };
+
+  const removeDriverAlias = async (fromKey) => {
+    if (!fromKey) return;
+    // eslint-disable-next-line no-unused-vars
+    const { [fromKey]: _removed, ...rest } = learnedDriverAliases;
+    await persistDriverAliases(rest);
+    showToast(`Removed alias for "${fromKey}"`);
   };
 
   const deleteVehicle = (rego) => {
@@ -14185,6 +14321,122 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             })}
             <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
               Changes save instantly and sync to all devices. Each receipt submission usually fires orientation + receipt (so 2 calls); a low-confidence scan can trigger a 3rd retry on the receipt model.
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Merge driver names ───────────────────────────────────────
+          Auto-resolution at submission time can't catch every nickname
+          / typo / spelling drift. This card lets the admin do bulk
+          renames + register the alias for future submissions, so a
+          variant only has to be cleaned up once. */}
+      {(() => {
+        // Build a unique driver-name list with entry counts. Sort by
+        // entry count desc so the most-used names land at the top.
+        const counts = {};
+        for (const e of entries) {
+          const dn = (e.driverName || e.driver || "").trim();
+          if (!dn) continue;
+          counts[dn] = (counts[dn] || 0) + 1;
+        }
+        const uniqueNames = Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+        const fromCount = mergeFrom ? (counts[mergeFrom] || 0) : 0;
+        const previewClean = mergeFrom && mergeTo && mergeFrom.trim().toLowerCase() !== mergeTo.trim().toLowerCase();
+        return (
+          <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 4 }}>Merge driver names</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
+              Combine alternate spellings or nicknames into one canonical name. Updates existing entries AND remembers the alias so future submissions auto-resolve.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, alignItems: "end", marginBottom: 10 }}>
+              <div>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 4 }}>Merge name</label>
+                <select
+                  value={mergeFrom}
+                  onChange={e => setMergeFrom(e.target.value)}
+                  style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 13, fontFamily: "inherit", color: "#0f172a", background: "white", outline: "none" }}
+                >
+                  <option value="">{"— pick a name to merge —"}</option>
+                  {uniqueNames.map(([n, c]) => (
+                    <option key={n} value={n}>{n} ({c} {c === 1 ? "entry" : "entries"})</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ fontSize: 18, color: "#94a3b8", fontWeight: 700, paddingBottom: 9 }}>{"→"}</div>
+              <div>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 4 }}>Into (canonical name)</label>
+                <input
+                  type="text"
+                  value={mergeTo}
+                  onChange={e => setMergeTo(e.target.value)}
+                  placeholder="Type the canonical name"
+                  list="merge-to-suggestions"
+                  style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 13, fontFamily: "inherit", color: "#0f172a", outline: "none", boxSizing: "border-box" }}
+                />
+                <datalist id="merge-to-suggestions">
+                  {uniqueNames.map(([n]) => <option key={n} value={n} />)}
+                </datalist>
+              </div>
+            </div>
+            {previewClean && (
+              <div style={{ background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#1e40af", marginBottom: 10 }}>
+                Preview: <strong>{fromCount}</strong> existing entr{fromCount === 1 ? "y" : "ies"} will be renamed from <strong>"{mergeFrom}"</strong> to <strong>"{mergeTo.trim()}"</strong>. Future submissions of "{mergeFrom}" will also auto-resolve.
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={async () => {
+                  if (!previewClean) return;
+                  await mergeDriverNames(mergeFrom, mergeTo);
+                  setMergeFrom("");
+                  setMergeTo("");
+                }}
+                disabled={!previewClean}
+                style={{
+                  padding: "9px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+                  background: previewClean ? "#16a34a" : "#f1f5f9",
+                  color: previewClean ? "white" : "#94a3b8",
+                  border: previewClean ? "1px solid #16a34a" : "1px solid #e2e8f0",
+                  cursor: previewClean ? "pointer" : "not-allowed", fontFamily: "inherit",
+                }}
+              >Merge</button>
+              {(mergeFrom || mergeTo) && (
+                <button
+                  onClick={() => { setMergeFrom(""); setMergeTo(""); }}
+                  style={{ padding: "9px 16px", borderRadius: 8, fontSize: 13, fontWeight: 500, background: "white", color: "#64748b", border: "1px solid #e2e8f0", cursor: "pointer", fontFamily: "inherit" }}
+                >Clear</button>
+              )}
+            </div>
+            {/* Saved aliases list */}
+            {Object.keys(learnedDriverAliases).length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 6 }}>
+                  Saved aliases · {Object.keys(learnedDriverAliases).length}
+                </div>
+                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+                  {Object.entries(learnedDriverAliases)
+                    .sort((a, b) => a[1].localeCompare(b[1]))
+                    .map(([from, to], i, arr) => (
+                      <div key={from} style={{
+                        display: "grid", gridTemplateColumns: "1fr auto 1fr auto", gap: 8, alignItems: "center",
+                        padding: "8px 12px", borderBottom: i < arr.length - 1 ? "1px solid #e2e8f0" : "none", fontSize: 12,
+                      }}>
+                        <span style={{ color: "#64748b", fontStyle: "italic" }}>{from}</span>
+                        <span style={{ color: "#94a3b8" }}>{"→"}</span>
+                        <span style={{ color: "#0f172a", fontWeight: 600 }}>{to}</span>
+                        <button
+                          onClick={() => removeDriverAlias(from)}
+                          title={`Stop auto-resolving "${from}" to "${to}". Existing renamed entries are NOT reverted.`}
+                          style={{ padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: 500, background: "white", color: "#b91c1c", border: "1px solid #fca5a5", cursor: "pointer", fontFamily: "inherit" }}
+                        >Remove</button>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>
+              {"•"} Removing an alias only stops future auto-resolution; entries already merged stay renamed (you'd need to re-merge to undo).
             </div>
           </div>
         );
