@@ -4017,9 +4017,11 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData, ranges = DEFAULT_
     const decimals = hrsMode ? 1 : 3;
     if (efficiency > range.high) {
       flags.push({ category: "ops", type: "warn", text: "High fuel usage", detail: `${efficiency.toFixed(decimals)} ${effUnit} \u2014 above expected for ${vehicleType}` });
-    } else if (efficiency < range.low) {
-      flags.push({ category: "ops", type: "info", text: "Low fuel usage", detail: `${efficiency.toFixed(decimals)} ${effUnit} \u2014 below expected` });
     }
+    // "Low fuel usage" used to flag here as well (info-level), but admin
+    // found no operational benefit \u2014 removed in May 2026. The `range.low`
+    // value is still used to colour-tint values in the Data/Dashboard
+    // tables blue, but no longer raises a flag for review.
   }
 
   if (litres > 0 && ppl > 0 && totalCost > 0) {
@@ -14417,10 +14419,14 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           ? Number(val).toFixed(val < 10 ? 1 : 0)
           : Number(val * 100).toFixed(val * 100 < 10 ? 1 : 0);
         const types = Object.keys(DEFAULT_EFFICIENCY_RANGES);
+        // Only `high` is user-editable now (low no longer flags), so the
+        // master Reset button reflects whether any high has been edited
+        // away from defaults — pre-existing low overrides on stored data
+        // are left alone but don't count toward "custom" here.
         const anyCustom = types.some(vt => {
           const cur = efficiencyThresholds[vt];
           const def = DEFAULT_EFFICIENCY_RANGES[vt];
-          return cur && def && (cur.low !== def.low || cur.high !== def.high);
+          return cur && def && cur.high !== def.high;
         });
         return (
           <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 16 }}>
@@ -14439,11 +14445,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               >Reset all to defaults</button>
             </div>
             <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
-              An entry flags as <b>High fuel usage</b> when it exceeds the high value, or <b>Low fuel usage</b> when it falls below the low. Defaults catch only egregious outliers. Tighten if you want to surface more entries; loosen if you're getting noise.
+              An entry flags as <b>High fuel usage</b> when it exceeds the high value for its vehicle type. Defaults catch only egregious outliers — tighten if you want to surface more entries, loosen if you're getting noise. (Low-end thresholds aren't shown because "low fuel usage" is no longer flagged.)
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1.4fr) minmax(80px, 1fr) minmax(80px, 1fr) auto", gap: 8, alignItems: "center", fontSize: 11, color: "#94a3b8", marginBottom: 6, paddingBottom: 6, borderBottom: "1px solid #f1f5f9" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1.4fr) minmax(80px, 1fr) auto", gap: 8, alignItems: "center", fontSize: 11, color: "#94a3b8", marginBottom: 6, paddingBottom: 6, borderBottom: "1px solid #f1f5f9" }}>
               <div style={{ fontWeight: 600 }}>Vehicle type</div>
-              <div style={{ fontWeight: 600 }}>Low</div>
               <div style={{ fontWeight: 600 }}>High</div>
               <div></div>
             </div>
@@ -14452,25 +14457,17 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               const cur = efficiencyThresholds[vt] || def;
               const isHrs = def.unit === "L/hr";
               const unitLabel = isHrs ? "L/hr" : "L/100km";
-              const isCustom = cur.low !== def.low || cur.high !== def.high;
+              // Only flag custom on `high` now — `low` no longer drives any
+              // flag, so an admin who edited a low value in a previous build
+              // shouldn't see this row marked "custom" (and shouldn't be
+              // able to reset something they can't see).
+              const isCustom = cur.high !== def.high;
               return (
-                <div key={vt} style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1.4fr) minmax(80px, 1fr) minmax(80px, 1fr) auto", gap: 8, alignItems: "center", padding: "6px 0" }}>
+                <div key={vt} style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1.4fr) minmax(80px, 1fr) auto", gap: 8, alignItems: "center", padding: "6px 0" }}>
                   <div style={{ fontSize: 13, fontWeight: 500, color: "#0f172a" }}>
                     {vt}
                     <span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 6, fontWeight: 400 }}>{unitLabel}</span>
                   </div>
-                  <input
-                    type="number"
-                    step={isHrs ? "0.5" : "1"}
-                    min="0"
-                    defaultValue={fmt(cur.low, isHrs)}
-                    onBlur={e => {
-                      const v = e.target.value;
-                      if (v === "" || Number(v) === Number(fmt(cur.low, isHrs))) return;
-                      setOne(vt, "low", v);
-                    }}
-                    style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: "5px 8px", fontSize: 12, fontFamily: "inherit", color: "#0f172a", outline: "none", width: "100%" }}
-                  />
                   <input
                     type="number"
                     step={isHrs ? "0.5" : "1"}
@@ -14486,7 +14483,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                   <button
                     onClick={() => resetOne(vt)}
                     disabled={!isCustom}
-                    title={isCustom ? `Reset ${vt} to defaults (low ${fmt(def.low, isHrs)} / high ${fmt(def.high, isHrs)} ${unitLabel})` : "Already at default"}
+                    title={isCustom ? `Reset ${vt} high to default (${fmt(def.high, isHrs)} ${unitLabel})` : "Already at default"}
                     style={{
                       padding: "4px 8px", borderRadius: 6, fontSize: 10, fontWeight: 500,
                       background: "transparent",
