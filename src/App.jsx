@@ -7841,20 +7841,6 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             : <><strong>Tips for a good scan:</strong> Lay the receipt flat {"\u00B7"} Place the fleet card next to it showing the full 16-digit number {"\u00B7"} Make sure all text is in focus and nothing is cut off</>
           }
         </div>
-        {/* Scan-card escape hatch \u2014 only on Step 2, only when a profile
-            is active. Sits below the tips so it's discoverable but
-            doesn't compete with the main "take a photo" instruction. */}
-        {profileApplied && (
-          <button onClick={scanCardAnyway}
-            title={`Re-enable the fleet-card scan for this entry \u2014 useful if ${profileApplied.name} has swapped cards or is using a different one today`}
-            style={{
-              background: "none", border: "none", color: "#1e40af",
-              fontSize: 11, padding: "6px 0 0 0", marginTop: 4,
-              cursor: "pointer", fontFamily: "inherit", textDecoration: "underline",
-              display: "block",
-            }}
-          >Scan fleet card anyway?</button>
-        )}
       </div>
       {!apiKey && (
         <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: 10, marginBottom: 14, fontSize: 13, color: "#b45309" }}>
@@ -8031,15 +8017,32 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         }}>{"\u21BB"} Re-scan</button>
       )}
 
-      {/* Fleet card detected from the same photo */}
+      {/* Fleet card detected from the same photo (or from an active
+          driver profile \u2014 see profileApplied). When a profile is
+          active, the "Different fleetcard?" link offers a one-click
+          escape hatch to clear the on-file card and re-enable the
+          scan UI for this entry only. */}
       {hasCard && (
         <div className="fade-in" style={{
           background: cardData._corrected ? "#f0fdf4" : "#fff7ed",
           border: `1px solid ${cardData._corrected ? "#86efac" : "#fdba74"}`,
           borderRadius: 8, padding: "8px 12px", marginTop: 10, fontSize: 12,
         }}>
-          <div style={{ fontWeight: 700, color: cardData._corrected ? "#15803d" : "#c2410c", marginBottom: 4, fontSize: 11 }}>
-            {"\uD83D\uDCB3"} Fleet card {cardData._corrected ? "matched & auto-corrected" : "detected"}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}>
+            <div style={{ fontWeight: 700, color: cardData._corrected ? "#15803d" : "#c2410c", fontSize: 11 }}>
+              {"\uD83D\uDCB3"} Fleet card {profileApplied ? "on file" : (cardData._corrected ? "matched & auto-corrected" : "detected")}
+            </div>
+            {profileApplied && (
+              <button onClick={scanCardAnyway}
+                title={`Clear the saved card for this entry only and re-enable the fleet-card scan \u2014 useful if ${profileApplied.name} has swapped cards or is using a different one today`}
+                style={{
+                  background: "none", border: "none",
+                  color: "#1e40af", fontSize: 11,
+                  padding: 0, cursor: "pointer", fontFamily: "inherit",
+                  textDecoration: "underline", whiteSpace: "nowrap",
+                }}
+              >Different fleetcard?</button>
+            )}
           </div>
           <div style={{ display: "flex", gap: 16 }}>
             <span><span style={{ color: "#94a3b8" }}>Card:</span> <span style={{ fontWeight: 600, color: "#0f172a" }}>...{cardData.cardNumber.slice(-6)}</span></span>
