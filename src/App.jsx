@@ -8574,12 +8574,31 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         }
       }
     } else if (!splitMode) {
-      primaryLine = null; // non-split uses receiptData directly
+      // When the receipt has MULTIPLE fuel lines but the user is NOT in
+      // split mode, assign line 0 to the primary entry and leave the rest
+      // as "extras" — the same model handleSubmit uses on save. Previously
+      // this branch forced primaryLine = null, which made the review screen
+      // display receipt TOTALS (litres + cost summed across all lines) even
+      // though the saved entry only used line 0. Result: a 22.24L unleaded
+      // + 51.31L diesel receipt for ONE vehicle was displayed as a 73.55L
+      // entry on review but only stored 22.24L — and the "X extra fuel
+      // lines" banner was the only hint that anything was off.
+      //
+      // Now: one entry = one line. Review = what actually gets stored. The
+      // extra lines stay in `availableLinesForReview` and surface via the
+      // "X extra fuel line(s) — add as separate entries?" banner (which
+      // appears below this review form and is the trigger for adding
+      // them as additional entries post-submit).
+      if (availableLinesForReview.length > 1) {
+        primaryLine = availableLinesForReview.shift();
+      } else {
+        primaryLine = null; // single-line receipt — receiptData totals == line 0 anyway
+      }
     }
     const primaryFuelType = primaryLine?.fuelType || receiptData?.fuelType || regoMatch?.f || "";
     const primaryLitres = splitMode
       ? (form.litres || primaryLine?.litres?.toString() || "0")
-      : (receiptData?._rawLitres || receiptData?.litres?.toString() || "");
+      : (primaryLine?.litres?.toString() || receiptData?._rawLitres || receiptData?.litres?.toString() || "");
 
     // Price per litre logic:
     // - If user entered $/L on Step 1, trust that first
@@ -8594,22 +8613,30 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     } else if (splitMode) {
       // Split mode: price per litre stays the same regardless of how litres are divided
       primaryPpl = primaryLine?.pricePerLitre || receiptData?.pricePerLitre || globalPpl;
+    } else if (primaryLine) {
+      // Multi-line receipt — use the ASSIGNED line's price, not the receipt's
+      // overall ppl (which is a weighted average across all fuels and would
+      // mismatch the saved entry's litres × cost).
+      primaryPpl = primaryLine.pricePerLitre
+        || ((primaryLine.cost && primaryLine.litres) ? parseFloat((primaryLine.cost / primaryLine.litres).toFixed(4)) : globalPpl);
     } else {
+      // Single-line receipt — recompute from totals (cost ÷ litres) for accuracy
       const lineCost = parseFloat(receiptData?._rawCost || receiptData?.fuelCost || receiptData?.totalCost || 0);
       if (userLitres > 0 && lineCost > 0) {
         primaryPpl = parseFloat((lineCost / userLitres).toFixed(4));
       } else {
-        primaryPpl = primaryLine?.pricePerLitre || globalPpl;
+        primaryPpl = globalPpl;
       }
     }
 
     // Cost logic:
     // - In split mode: cost = user's litres × price per litre (not the full receipt cost)
-    // - In non-split mode: use the scanned cost directly
+    // - Multi-line non-split: use the ASSIGNED line's cost (one entry = one line)
+    // - Single-line non-split: use the receipt total (which equals the only line's cost)
     const primaryCost = receiptData?._rawCost
       || (splitMode
         ? (userLitres > 0 && primaryPpl > 0 ? (userLitres * primaryPpl).toFixed(2) : (primaryLine?.cost?.toFixed(2) || ""))
-        : (receiptData?.fuelCost?.toString() || receiptData?.totalCost?.toString() || ""));
+        : (primaryLine?.cost?.toFixed(2) || receiptData?.fuelCost?.toString() || receiptData?.totalCost?.toString() || ""));
 
     const vehicleRows = [
       { label: "First Name", val: form.driverFirstName, set: v => setForm(f => ({...f, driverFirstName: v})) },
@@ -8630,7 +8657,16 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       })() },
       { label: "Station", val: receiptData?.station || "", set: v => setReceiptData(d => ({...d, station: v})) },
       { label: "Fuel type", val: primaryFuelType, set: v => setReceiptData(d => ({...d, fuelType: v})) },
-      { label: "Litres", val: primaryLitres, set: v => { if (splitMode) setForm(f => ({...f, litres: v})); else setReceiptData(d => ({...d, litres: v, _rawLitres: v})); } },
+      { label: "Litres", val: primaryLitres, set: v => {
+        // Edit routing:
+        // - Split mode → form.litres (handleSubmit reads from there for primary)
+        // - Multi-line non-split → form.litres too (overrides the assigned line's
+        //   litres in handleSubmit, which checks form.litres BEFORE primaryLine.litres)
+        // - Single-line non-split → receiptData.litres (which IS the entry's litres
+        //   since parsedLitresTotal == primaryLine.litres in that case)
+        if (splitMode || primaryLine) setForm(f => ({...f, litres: v}));
+        else setReceiptData(d => ({...d, litres: v, _rawLitres: v}));
+      } },
       { label: "$/L", val: receiptData?._rawPpl || primaryPpl?.toString() || "", set: v => setReceiptData(d => ({...d, pricePerLitre: v, _rawPpl: v})) },
       { label: "Cost", val: primaryCost, set: v => setReceiptData(d => ({...d, totalCost: v, _rawCost: v})) },
     ];
