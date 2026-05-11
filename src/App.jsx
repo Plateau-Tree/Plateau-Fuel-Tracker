@@ -8777,9 +8777,26 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       ? scannedOtherItems.slice(otherSplitCount) : [];
     const hasUnmatched = unmatchedFuelLines.length > 0 || unmatchedOtherItems.length > 0;
 
-    // Auto-create splits for unmatched items
+    // Auto-create splits for unmatched items.
+    //
+    // When transitioning non-split → split here, pin the primary entry's
+    // litres to scannedLines[0]. Otherwise the smart-match logic in the
+    // split branch (renderStep3 top) falls back to "biggest line wins
+    // for the biggest vehicle type" — so on a Truck primary with a
+    // 22.24L unleaded + 51.31L diesel receipt, the diesel line gets
+    // matched to the primary truck even though it was JUST added as a
+    // split, and both entries end up showing the same diesel litres.
+    // Pinning form.litres to Line 0's value forces the smart-match into
+    // the "match by user-entered litres" branch, which deterministically
+    // picks Line 0 for primary and leaves the remaining lines for the
+    // splits — so each entry gets a different receipt line.
     const autoAddUnmatched = () => {
-      if (!splitMode) setSplitMode(true);
+      if (!splitMode) {
+        setSplitMode(true);
+        if (scannedLines[0]?.litres) {
+          setForm(f => ({ ...f, litres: scannedLines[0].litres.toString() }));
+        }
+      }
       const newSplits = [];
       unmatchedFuelLines.forEach(line => {
         newSplits.push({
