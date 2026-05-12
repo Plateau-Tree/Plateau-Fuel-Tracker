@@ -231,16 +231,6 @@ const db = {
     if (error) console.error("DB saveSetting:", error);
   },
 
-  // Delete a setting row entirely (vs saveSetting(key, null) which just sets
-  // value=null and leaves the row taking up disk space + showing up in scans).
-  // Used by the receipt-image cleanup so old `receipt_img_<id>` rows actually
-  // free their storage rather than lingering as null-valued rows.
-  async deleteSetting(key) {
-    if (!supabase) return;
-    const { error } = await supabase.from("app_settings").delete().eq("key", key);
-    if (error) console.error("DB deleteSetting:", error);
-  },
-
   // Fleet card transactions (stored as JSON in app_settings)
   async loadFleetCardTransactions() {
     const raw = await this.loadSetting("fleet_card_transactions");
@@ -4336,62 +4326,18 @@ export default function App() {
     });
   };
 
-  // ── Receipt image storage ──
-  //
-  // Two storage backends, tried in order:
-  //   1. Supabase Storage bucket "receipts" — PRIMARY for new receipts.
-  //      Keeps photo blobs OUT of Postgres tables, so they don't bloat
-  //      app_settings rows or get rebroadcast to every admin tab on every
-  //      Realtime push. Bucket reads/writes don't count against the
-  //      project's Postgres Disk IO budget — which historically was the
-  //      single biggest IO drain (each receipt-save UPSERT into
-  //      app_settings was a multi-hundred-KB row write + a Realtime
-  //      broadcast of that same KB payload to every subscribed client).
-  //   2. app_settings table (legacy fallback) — kept so existing receipts
-  //      already saved as `__db__` URLs still work, and so a bucket
-  //      misconfiguration doesn't break receipt submission.
-  //
-  // `loadReceiptImage` already handles both URL shapes (a non-`__db__`
-  // string is treated as a direct image URL and shown via <img src=...>;
-  // a `__db__<id>` string triggers an app_settings lookup).
+  // ── Receipt image storage (Supabase app_settings) ──
   const saveReceiptImage = async (entryId, b64, mime) => {
     try {
-      // Compress the image first to keep storage manageable
+      // Compress the image first to keep DB storage manageable
       const compressed = await compressReceiptImage(b64, mime);
+      const imgData = JSON.stringify({ b64: compressed.b64, mime: compressed.mime });
 
       if (supabase) {
-        // PRIMARY: upload to the storage bucket. JPEG bytes go straight
-        // to the bucket; we persist the resulting public URL on the
-        // entry's receiptUrl so loadReceiptImage's non-`__db__` branch
-        // picks it up automatically.
-        try {
-          const fileBytes = Uint8Array.from(atob(compressed.b64), c => c.charCodeAt(0));
-          const path = `${entryId}.jpg`;
-          const { error: upErr } = await supabase.storage
-            .from("receipts")
-            .upload(path, fileBytes, { contentType: "image/jpeg", upsert: true });
-          if (!upErr) {
-            const { data: pub } = supabase.storage.from("receipts").getPublicUrl(path);
-            const entry = entriesRef.current.find(e => e.id === entryId);
-            if (entry && pub?.publicUrl) {
-              const updated = { ...entry, hasReceipt: true, receiptUrl: pub.publicUrl };
-              const nextEntries = entriesRef.current.map(e => e.id === entryId ? updated : e);
-              entriesRef.current = nextEntries;
-              setEntries(nextEntries);
-              db.saveEntry(updated).catch(() => {});
-            }
-            console.log("Receipt image uploaded to storage bucket for entry:", entryId);
-            return;
-          }
-          console.warn("Storage bucket upload failed, falling back to app_settings:", upErr);
-        } catch (bucketErr) {
-          console.warn("Storage bucket path threw, falling back to app_settings:", bucketErr);
-        }
-
-        // FALLBACK: legacy app_settings path. Only used if the bucket
-        // upload fails (RLS misconfigured, bucket missing, network blip).
-        const imgData = JSON.stringify({ b64: compressed.b64, mime: compressed.mime });
+        // Primary: save to Supabase app_settings table (reliable, no bucket needed)
         await db.saveSetting(`receipt_img_${entryId}`, imgData);
+        // Mark entry as having a receipt — immutable update so React re-renders
+        // and the ref stays consistent with state (no mutation of old objects).
         const entry = entriesRef.current.find(e => e.id === entryId);
         if (entry) {
           const updated = { ...entry, hasReceipt: true, receiptUrl: `__db__${entryId}` };
@@ -4400,10 +4346,9 @@ export default function App() {
           setEntries(nextEntries);
           db.saveEntry(updated).catch(() => {});
         }
-        console.log("Receipt image saved to app_settings (fallback) for entry:", entryId);
+        console.log("Receipt image saved to database for entry:", entryId);
       } else {
         // No Supabase — fallback to localStorage
-        const imgData = JSON.stringify({ b64: compressed.b64, mime: compressed.mime });
         await window.storage.set(`fuel_receipt_img_${entryId}`, imgData);
       }
     } catch (err) {
@@ -4466,122 +4411,15 @@ export default function App() {
   const deleteReceiptImage = async (entryId) => {
     try {
       if (supabase) {
-        // Delete the legacy app_settings row entirely (NOT save-with-null —
-        // that would leave a null-valued row taking up disk space). Falls
-        // back to nulling for older bucket-less projects that don't have
-        // delete privileges.
-        await db.deleteSetting(`receipt_img_${entryId}`).catch(() =>
-          db.saveSetting(`receipt_img_${entryId}`, null).catch(() => {})
-        );
-        // Also try Supabase Storage (where new receipts live)
+        // Delete from app_settings
+        await db.saveSetting(`receipt_img_${entryId}`, null);
+        // Also try Supabase Storage (legacy)
         await supabase.storage.from("receipts").remove([`${entryId}.jpg`, `${entryId}.png`]).catch(() => {});
       }
       // Also clean up localStorage fallback
       await window.storage.delete(`fuel_receipt_img_${entryId}`);
     } catch (_) {}
   };
-
-  // ── Auto-delete receipt photos older than RECEIPT_RETENTION_DAYS ──
-  //
-  // Storage hygiene pass. Receipt photos are the single largest disk
-  // consumer in the project (one ~80–200 KB JPEG per fuel claim). Even
-  // with the bucket migration relieving Postgres IO pressure, the bucket
-  // itself fills up over time. This pass runs at most once per 24 hours
-  // when an admin opens the Data tab, finds claim entries older than
-  // 30 days that still carry a photo, and deletes the photo (entry row
-  // itself stays — only the image is removed so historical exports and
-  // reconciliation history are not affected).
-  //
-  // Skipped automatically:
-  //   • Entries with any unresolved admin flag — the photo is evidence
-  //     for the dispute and must outlive the retention window.
-  //   • Entries with no date and no parseable timestamp in the id, so we
-  //     never delete a photo whose age we can't verify.
-  //
-  // Cooldown is keyed in localStorage, so it persists across page reloads
-  // but is per-browser — running on a second admin's machine the next day
-  // is fine and idempotent (nothing left to delete = no-op).
-  const RECEIPT_RETENTION_DAYS = 30;
-  const autoDeleteOldReceipts = useCallback(async () => {
-    if (!supabase) return;
-    // Throttle: only one full pass per 24h per browser.
-    try {
-      const lastRunRaw = localStorage.getItem("fuel_receipt_cleanup_last_run");
-      const lastRun = lastRunRaw ? parseInt(lastRunRaw, 10) : 0;
-      if (Date.now() - lastRun < 24 * 60 * 60 * 1000) return;
-    } catch (_) { /* ignore — proceed */ }
-
-    const now = Date.now();
-    const cutoffMs = RECEIPT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-    const allEntries = entriesRef.current || [];
-    const resolved = resolvedFlagsRef.current || {};
-    const fid = (f) => `${f.rego}::${f.text}::${f.date || ""}::${f.odo || ""}`;
-
-    const candidates = allEntries.filter(e => {
-      if (!e.receiptUrl && !e.hasReceipt) return false;
-      // Receipt age — prefer entry.date (the receipt's printed date), fall
-      // back to the entry id's embedded epoch (ids are Date.now().toString()
-      // at submission time).
-      let entryMs = null;
-      if (e.date) {
-        const d = new Date(e.date);
-        if (!isNaN(d.getTime())) entryMs = d.getTime();
-      }
-      if (entryMs == null) {
-        const idMs = parseInt((e.id || "").slice(0, 13), 10);
-        if (!isNaN(idMs)) entryMs = idMs;
-      }
-      if (entryMs == null) return false;
-      if (now - entryMs < cutoffMs) return false;
-      // Preserve photos on entries with open flags — they're evidence
-      const flags = e.flags || [];
-      const hasOpen = flags.some(f => !resolved[fid(f)]);
-      if (hasOpen) return false;
-      return true;
-    });
-
-    if (candidates.length === 0) {
-      try { localStorage.setItem("fuel_receipt_cleanup_last_run", Date.now().toString()); } catch (_) {}
-      return;
-    }
-
-    console.log(`[Receipt cleanup] Deleting ${candidates.length} receipt photo(s) older than ${RECEIPT_RETENTION_DAYS} days`);
-
-    let deleted = 0;
-    const deletedIds = new Set();
-    for (const e of candidates) {
-      try {
-        // Storage bucket — remove both common extensions (we always upload
-        // .jpg now but historical receipts may be .png).
-        await supabase.storage.from("receipts").remove([`${e.id}.jpg`, `${e.id}.png`]).catch(() => {});
-        // app_settings legacy row — deleting the row (not nulling) so the
-        // storage is actually freed. Safe to call even if no row exists.
-        await db.deleteSetting(`receipt_img_${e.id}`).catch(() => {});
-        // Update the entry record — clears the photo button on the data tab
-        // and stops future loadReceiptImage calls from re-fetching a
-        // now-missing image.
-        const updated = { ...e, receiptUrl: null, hasReceipt: false };
-        await db.saveEntry(updated).catch(() => {});
-        deletedIds.add(e.id);
-        deleted++;
-      } catch (err) {
-        console.warn("[Receipt cleanup] Failed to delete receipt for entry:", e.id, err);
-      }
-    }
-
-    if (deleted > 0) {
-      // Patch local state so the UI updates without a refetch
-      const nextEntries = (entriesRef.current || []).map(e =>
-        deletedIds.has(e.id) ? { ...e, receiptUrl: null, hasReceipt: false } : e
-      );
-      entriesRef.current = nextEntries;
-      setEntries(nextEntries);
-      try { await window.storage.set("fuel_entries", JSON.stringify(nextEntries)); } catch (_) {}
-      showToast(`Cleaned up ${deleted} old receipt photo${deleted === 1 ? "" : "s"} (>${RECEIPT_RETENTION_DAYS} days)`);
-    }
-
-    try { localStorage.setItem("fuel_receipt_cleanup_last_run", Date.now().toString()); } catch (_) {}
-  }, [showToast]);
 
   const receiptRef = useRef();
   const scanResultsRef = useRef();
@@ -5149,12 +4987,8 @@ export default function App() {
       return;
     }
     const now = Date.now();
-    // Debounce: skip if we just refreshed <8s ago, unless force=true.
-    // Raised from 2s to 8s as part of the Disk IO budget rescue — a burst
-    // of Realtime pushes (e.g. an admin batch-resolving 20 flags) used to
-    // trigger 20 back-to-back refreshes; now they coalesce into one or
-    // two. Manual user-initiated refreshes still bypass via force=true.
-    if (!force && now - lastRefreshAttemptRef.current < 8000) return;
+    // Debounce: skip if we just refreshed <2s ago, unless force=true
+    if (!force && now - lastRefreshAttemptRef.current < 2000) return;
     lastRefreshAttemptRef.current = now;
     setIsSyncing(true);
     try {
@@ -5299,30 +5133,12 @@ export default function App() {
 
   // ── Automatic cross-device sync triggers ───────────────────────────────────
   // Runs AFTER the initial mount load has set up state. Ensures admin edits
-  // from one computer reach others without spending the project's Disk IO
-  // budget on redundant refreshes:
+  // from one computer reach others quickly:
   //   1) Tab becomes visible again → refresh
   //   2) Window regains focus → refresh
-  //   3) Supabase Realtime push on fuel_entries / service_data /
-  //      resolved_flags → refresh (debounced 8s in refreshFromCloud)
-  //   4) Periodic 5-minute interval while tab is visible → safety net
-  //
-  // Two deliberate Disk IO economies vs. the original wiring:
-  //
-  // (a) NO Realtime subscription on app_settings. Receipt photos used to be
-  //     written into app_settings as base64 blobs; every save fired a
-  //     postgres_changes broadcast that fanned out to every admin tab and
-  //     triggered a full refreshFromCloud (which itself runs ~10 SELECTs).
-  //     New receipts now live in the storage bucket, so app_settings only
-  //     changes when an admin edits API keys / learned mappings — those
-  //     pick up on the next focus/visibility refresh, which is fine.
-  //
-  // (b) Polling cadence relaxed from 60s → 5 minutes. Realtime catches all
-  //     entry/service/flag changes near-instantly; the interval only
-  //     matters as a fallback when a Realtime message is dropped. At 60s
-  //     a tab open all day was firing ~1440 refreshFromCloud calls,
-  //     each ≈10 SELECTs = 14,400 reads/day per open tab. At 5 minutes
-  //     that drops to ~2,880 reads/day per tab — an ~80% reduction.
+  //   3) Supabase Realtime push on fuel_entries / app_settings / service_data /
+  //      resolved_flags → refresh
+  //   4) Periodic 60s interval while tab is visible → safety net
   useEffect(() => {
     if (!supabase || !storageReady) return;
 
@@ -5334,17 +5150,14 @@ export default function App() {
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("focus", handleFocus);
 
-    // Periodic poll (5 min) — only when the tab is visible. Mostly redundant
-    // with Realtime; kept as a safety net for dropped Realtime messages.
+    // Periodic poll (60s) — only when the tab is visible.
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") refreshFromCloud({ silent: true });
-    }, 5 * 60_000);
+    }, 60_000);
 
     // Realtime subscriptions — push-based near-instant updates. If Realtime
     // isn't enabled on a table in the Supabase dashboard, the subscribe will
     // simply no-op and we fall back to the focus/interval triggers above.
-    //
-    // app_settings is intentionally NOT subscribed (see (a) above).
     const channels = [];
     try {
       const triggerRefresh = () => refreshFromCloud({ silent: true });
@@ -5354,6 +5167,7 @@ export default function App() {
           .on("postgres_changes", { event: "*", schema: "public", table }, triggerRefresh)
           .subscribe();
       channels.push(mkChannel("entries", "fuel_entries"));
+      channels.push(mkChannel("settings", "app_settings"));
       channels.push(mkChannel("service", "service_data"));
       channels.push(mkChannel("flags", "resolved_flags"));
     } catch (err) {
@@ -5367,17 +5181,6 @@ export default function App() {
       channels.forEach(ch => { try { supabase.removeChannel(ch); } catch (_) {} });
     };
   }, [storageReady, refreshFromCloud]);
-
-  // Receipt-photo retention pass — runs at most once per 24h whenever an
-  // admin opens the Data tab. Deferred a couple of seconds so initial render
-  // and any in-flight refreshFromCloud finish first (avoids racing the
-  // entries list while we're filtering it). See autoDeleteOldReceipts for
-  // the retention rules + skip conditions.
-  useEffect(() => {
-    if (view !== "data" || !storageReady) return;
-    const t = setTimeout(() => { autoDeleteOldReceipts().catch(() => {}); }, 2000);
-    return () => clearTimeout(t);
-  }, [view, storageReady, autoDeleteOldReceipts]);
 
   // Keep editingInProgressRef in sync with modal-open states. refreshFromCloud
   // reads this ref and skips while the admin has unsaved form state. When the
