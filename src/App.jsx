@@ -10880,7 +10880,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
 
         {/* ── Period selector ── */}
         <div style={{
-          background: "white", border: "1px solid #e2e8f0", borderRadius: 10,
+          background: "#a855f7", border: "1px solid #e2e8f0", borderRadius: 10,
           padding: "12px 16px", marginBottom: 16,
         }}>
           {/* Period tabs */}
