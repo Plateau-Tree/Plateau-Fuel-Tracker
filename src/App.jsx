@@ -361,9 +361,9 @@ const VT_COLORS = {
 };
 
 const SERVICE_INTERVAL_KM = 10000;
-const SERVICE_INTERVAL_HRS = 500; // Hours-based service interval for plant/equipment
+const SERVICE_INTERVAL_HRS = 200; // Hours-based service interval for plant/equipment
 const SERVICE_WARNING_KM = 2000; // Warn at 8000km (10000 - 2000)
-const SERVICE_WARNING_HRS = 50;  // Warn at 450hrs (500 - 50)
+const SERVICE_WARNING_HRS = 50;  // Warn at 150hrs (200 - 50)
 
 // Vehicle types that track hours instead of km
 const HOURS_BASED_TYPES = new Set(["Excavator", "Stump Grinder", "Mower", "Landscape Tractor", "Chipper"]);
